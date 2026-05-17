@@ -553,25 +553,7 @@ function HuntSheet({onClose, onAddPromos}) {
     const today     = new Date().toDateString();
     const workerUrl = loadWorkerUrl();
 
-    try {
-      // ── Route A: Cloudflare Worker (scrapes live sites) ───────────────────
-      if(workerUrl) {
-        const r = await fetch(`${workerUrl}/hunt`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ store, region, category: cat, apiKey }),
-        });
-        const d = await r.json();
-        if(d.error) {
-          setErr(d.auth ? 'Invalid API key. Tap "Change API key" to update it.' : `Worker error: ${d.error}`);
-          setLoading(false); return;
-        }
-        setResults(Array.isArray(d.deals) ? d.deals : []);
-        setLoading(false); return;
-      }
-
-      // ── Route B: Direct Claude call (knowledge-based, no worker) ─────────
-      const prompt = `You are PromoHunter AI, an expert in ${region} retail discounts and promo codes.
+    const prompt = `You are PromoHunter AI, an expert in ${region} retail discounts and promo codes.
 
 The user wants ALL known promo codes and deals for: "${store}" in ${region} (${catLabel} category).
 Today is ${today}.
@@ -584,26 +566,54 @@ Instructions:
 5. Do NOT invent random codes. Only include codes you actually have knowledge of.
 
 Return ONLY a valid JSON array. No markdown, no backticks, no explanation outside the array.
+Each item: {"store":"${store}","code":"PROMOCODE or empty string","discount":"e.g. 20% off","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${cat}","notes":"restrictions, source","verified":true or false,"expiresAt":"YYYY-MM-DD or empty","sourceUrl":""}
+Return up to 10 results. If no knowledge of real codes, return [].`;
 
-Each item must be exactly:
-{"store":"${store}","code":"PROMOCODE or empty string if no code needed","discount":"clear description e.g. 20% off, $5 off, Free first hour","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${cat}","notes":"how to use, restrictions, where seen e.g. OzBargain post","verified":true or false,"expiresAt":"YYYY-MM-DD if known else empty string","sourceUrl":""}
+    try {
+      // ── Route A: Cloudflare Worker (required for iOS Safari) ─────────────
+      if(workerUrl) {
+        let r;
+        try {
+          r = await fetch(`${workerUrl}/hunt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ store, region, category: cat, apiKey }),
+          });
+        } catch(e) {
+          setErr(`Cannot reach worker at ${workerUrl} — check the URL in Settings and your internet connection.`);
+          setLoading(false); return;
+        }
+        const d = await r.json();
+        if(d.error) {
+          setErr(d.auth ? 'Invalid API key. Tap "Change API key" to update it.' : `Worker error: ${d.error}`);
+          setLoading(false); return;
+        }
+        setResults(Array.isArray(d.deals) ? d.deals : []);
+        setLoading(false); return;
+      }
 
-Return up to 10 results. If you have zero knowledge of any real codes or deals, return [].`;
-
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
-          max_tokens: 2000,
-          messages: [{ role: 'user', content: prompt }],
-        })
-      });
+      // ── Route B: Direct Claude call (desktop/Android only — blocked on iOS) ─
+      let r;
+      try {
+        r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5',
+            max_tokens: 2000,
+            messages: [{ role: 'user', content: prompt }],
+          })
+        });
+      } catch(e) {
+        // iOS Safari blocks direct api.anthropic.com calls — worker is required
+        setErr('iOS Safari blocks direct API calls. Add your Cloudflare Worker URL in ⚙️ Settings → Cloudflare Worker URL to enable AI Hunt on iPhone.');
+        setLoading(false); return;
+      }
       const d = await r.json();
       if(d.error) {
         setErr(d.error.type==='authentication_error'
@@ -619,8 +629,7 @@ Return up to 10 results. If you have zero knowledge of any real codes or deals, 
       setResults(Array.isArray(parsed) ? parsed : []);
 
     } catch(e) {
-      console.error(e);
-      setErr('Connection failed — check your internet and try again.');
+      setErr(`Unexpected error: ${e.message||e}`);
     }
     setLoading(false);
   };
@@ -655,6 +664,17 @@ Return up to 10 results. If you have zero knowledge of any real codes or deals, 
       )}
 
       <p style={{fontSize:14,color:T.inkMid,marginBottom:16,lineHeight:1.65}}>Describe any store and Claude will suggest realistic codes tailored to your region.</p>
+
+      {/* iOS warning — direct API calls blocked without worker */}
+      {!loadWorkerUrl() && (
+        <div style={{padding:'12px 14px',background:T.amberDim||T.goldBg,borderRadius:12,border:`1px solid ${T.gold}30`,marginBottom:16,display:'flex',gap:10,alignItems:'flex-start'}}>
+          <Icon n="info" s={15} c={T.gold}/>
+          <div style={{flex:1}}>
+            <p style={{fontSize:13,color:T.gold,fontWeight:600,marginBottom:4}}>Cloudflare Worker required on iPhone</p>
+            <p style={{fontSize:12,color:T.gold,lineHeight:1.6,margin:0}}>iOS Safari blocks direct API calls. Set up your Worker URL in <strong>⚙️ Settings → Cloudflare Worker URL</strong> to use AI Hunt.</p>
+          </div>
+        </div>
+      )}
 
       {/* Region + Category row */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
