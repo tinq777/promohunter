@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
+<meta name="theme-color" content="#f8f7f4"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="PromoHunter"/>
+<title>PromoHunter</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body,#root{height:100%;overflow:hidden;background:#f8f7f4;}
+input,select,textarea{font-size:16px!important;}
+::-webkit-scrollbar{display:none;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// PWA manifest + icons
+(function(){
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#e85d26"/><path d="M44 10 20 54" stroke="#fff" stroke-width="4" stroke-linecap="round"/><circle cx="22" cy="20" r="7" fill="none" stroke="#fff" stroke-width="3.5"/><circle cx="42" cy="44" r="7" fill="none" stroke="#fff" stroke-width="3.5"/></svg>`;
+  const blob=new Blob([svg],{type:'image/svg+xml'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('link');link.rel='icon';link.type='image/svg+xml';link.href=url;
+  document.head.appendChild(link);
+  const img=new Image();
+  img.onload=()=>{
+    const c=document.createElement('canvas');c.width=c.height=180;
+    c.getContext('2d').drawImage(img,0,0,180,180);
+    const a=document.createElement('link');a.rel='apple-touch-icon';a.href=c.toDataURL('image/png');
+    document.head.appendChild(a);URL.revokeObjectURL(url);
+  };img.src=url;
+  const m={name:'PromoHunter',short_name:'PromoHunter',description:'Hunt promo codes & discounts',start_url:'.',display:'standalone',background_color:'#f8f7f4',theme_color:'#f8f7f4',icons:[{src:url,sizes:'any',type:'image/svg+xml',purpose:'any maskable'}]};
+  const mb=new Blob([JSON.stringify(m)],{type:'application/manifest+json'});
+  const ml=document.createElement('link');ml.rel='manifest';ml.href=URL.createObjectURL(mb);
+  document.head.appendChild(ml);
+})();
+// Service worker
+if('serviceWorker' in navigator){
+  const sw=`const C='ph-v1';self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/']))));self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request))));`;
+  navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
+}
+</script>
+<script type="text/babel">
+const { useState, useMemo, useRef, useEffect, useCallback } = React;
+
+/* ─── Design tokens — light & dark ──────────────────────────────────────────── */
+const THEMES = {
+  light: {
+    bg:        '#f8f7f4',
+    bgWarm:    '#f2f0eb',
+    surface:   '#ffffff',
+    ink:       '#1a1814',
+    inkMid:    '#6b6760',
+    inkFaint:  '#b8b5ae',
+    rule:      '#e8e5de',
+    accent:    '#e85d26',
+    accentBg:  'rgba(232,93,38,0.09)',
+    accentBd:  'rgba(232,93,38,0.22)',
+    emerald:   '#2a7d4f', emeraldBg:'rgba(42,125,79,0.09)',
+    gold:      '#b5860d', goldBg:   'rgba(181,134,13,0.09)',
+    rose:      '#c0392b', roseBg:   'rgba(192,57,43,0.09)',
+    sapphire:  '#2563a8', sapphireBg:'rgba(37,99,168,0.09)',
+    violet:    '#7c4dae', violetBg: 'rgba(124,77,174,0.09)',
+  },
+  dark: {
+    bg:        '#0f0e0d',
+    bgWarm:    '#1a1916',
+    surface:   '#1f1e1b',
+    ink:       '#f0ede8',
+    inkMid:    '#9c9790',
+    inkFaint:  '#5a5750',
+    rule:      '#2e2c28',
+    accent:    '#ff7040',
+    accentBg:  'rgba(255,112,64,0.12)',
+    accentBd:  'rgba(255,112,64,0.28)',
+    emerald:   '#3dba6e', emeraldBg:'rgba(61,186,110,0.12)',
+    gold:      '#d4a220', goldBg:   'rgba(212,162,32,0.12)',
+    rose:      '#e05252', roseBg:   'rgba(224,82,82,0.12)',
+    sapphire:  '#4a8fd4', sapphireBg:'rgba(74,143,212,0.12)',
+    violet:    '#9d6fd4', violetBg: 'rgba(157,111,212,0.12)',
+  },
+};
+
+const DARK_MODE_KEY = 'promohunter_darkmode';
+const loadDarkMode  = () => { try { return localStorage.getItem(DARK_MODE_KEY)==='1'; } catch { return false; } };
+const saveDarkMode  = v => { try { localStorage.setItem(DARK_MODE_KEY, v?'1':'0'); } catch {} };
+
+// T is a single plain object. App calls applyTheme(dark) before every render,
+// which copies the right token values into T in-place. Because React re-renders
+// children after the parent, every T.xxx read in child components sees the update.
+const T = Object.assign({}, THEMES.light);
+const applyTheme = dark => Object.assign(T, dark ? THEMES.dark : THEMES.light);
+
+const CAT = {
+  retail:   {label:'Retail',    color:T.sapphire, bg:T.sapphireBg},
+  food:     {label:'Food',      color:T.emerald,  bg:T.emeraldBg },
+  travel:   {label:'Travel',    color:T.violet,   bg:T.violetBg  },
+  tech:     {label:'Tech',      color:T.accent,   bg:T.accentBg  },
+  streaming:{label:'Streaming', color:T.rose,     bg:T.roseBg    },
+  fashion:  {label:'Fashion',   color:T.gold,     bg:T.goldBg    },
+  beauty:   {label:'Beauty',    color:'#a0416d',  bg:'rgba(160,65,109,0.09)'},
+  fitness:  {label:'Fitness',   color:T.emerald,  bg:T.emeraldBg },
+  finance:  {label:'Finance',   color:T.gold,     bg:T.goldBg    },
+  other:    {label:'Other',     color:T.inkMid,   bg:'rgba(107,103,96,0.09)'},
+};
+const CATS  = Object.entries(CAT).map(([id,v])=>({id,...v}));
+const TYPES = ['Percentage','Fixed Amount','BOGO','Free Shipping','Free Trial','Other'];
+const uid   = () => `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+
+/* ─── SVG icon system ───────────────────────────────────────────────────────── */
+const Icon = ({n, s=16, c='currentColor', w=1.5}) => {
+  const P = {
+    tag:   <><path d="M3 3h7l8 8-7 7-8-8V3z"/><circle cx="7.5" cy="7.5" r="1"/></>,
+    srch:  <><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></>,
+    plus:  <path d="M12 5v14M5 12h14"/>,
+    x:     <path d="M18 6 6 18M6 6l12 12"/>,
+    star:  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>,
+    starF: <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill={c} stroke="none"/>,
+    chk:   <path d="M20 6 9 17l-5-5"/>,
+    chkC:  <><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></>,
+    copy:  <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
+    edit:  <><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>,
+    del:   <><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></>,
+    cog:   <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></>,
+    bot:   <><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M12 11V3M8 3h8M6 15h.01M18 15h.01M10 19h4"/></>,
+    link:  <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
+    clock: <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>,
+    shld:  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
+    zap:   <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>,
+    arr:   <path d="M5 12h14M12 5l7 7-7 7"/>,
+    chvD:  <path d="m6 9 6 6 6-6"/>,
+    undo:  <path d="M3 7v6h6M3 13A9 9 0 1 0 6 6.1L3 7"/>,
+    grid:  <><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></>,
+    list:  <><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></>,
+    info:  <><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></>,
+    bars:  <><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></>,
+    pct:    <><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></>,
+    git:    <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>,
+    moon:   <><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></>,
+    sun:    <><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></>,
+    eyeOff: <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>,
+  };
+  return (
+    <svg viewBox="0 0 24 24" style={{width:s,height:s,display:'block',flexShrink:0}}
+      fill="none" stroke={c} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round">
+      {P[n]}
+    </svg>
+  );
+};
+
+/* ─── Sample data (AU-focused) ──────────────────────────────────────────────── */
+const PROMOS_STORAGE = 'promohunter_promos';
+const savePromos = p => {
+  try { localStorage.setItem(PROMOS_STORAGE, JSON.stringify(p)); } catch {}
+};
+
+/* ─── Sample data (AU-focused) ──────────────────────────────────────────────── */
+const mkPromos = () => [
+  {id:uid(),store:'JB Hi-Fi',       code:'JBSAVE15',   discount:'15',           type:'Percentage',   category:'tech',      url:'https://jbhifi.com.au',        notes:'Selected tech & appliances', expiresAt:new Date(Date.now()+ 7*864e5).toISOString().split('T')[0],savedAt:new Date().toISOString(),used:false,favourite:true, verified:true },
+  {id:uid(),store:'The Iconic',     code:'ICONIC20',   discount:'20',           type:'Percentage',   category:'fashion',   url:'https://theiconic.com.au',     notes:'Full-price items only',      expiresAt:new Date(Date.now()+14*864e5).toISOString().split('T')[0],savedAt:new Date().toISOString(),used:false,favourite:true, verified:false},
+  {id:uid(),store:'Chemist Warehouse',code:'CWFREE',   discount:'Free delivery',type:'Free Shipping',category:'beauty',    url:'https://chemistwarehouse.com.au',notes:'Orders over $49',           expiresAt:new Date(Date.now()+21*864e5).toISOString().split('T')[0],savedAt:new Date().toISOString(),used:false,favourite:false,verified:true },
+  {id:uid(),store:'Menulog',        code:'MLOG10',     discount:'10',           type:'Percentage',   category:'food',      url:'https://menulog.com.au',       notes:'First 3 orders',             expiresAt:new Date(Date.now()+ 5*864e5).toISOString().split('T')[0],savedAt:new Date().toISOString(),used:false,favourite:false,verified:true },
+  {id:uid(),store:'Kogan',          code:'KOGVIP',     discount:'5',            type:'Percentage',   category:'retail',    url:'https://kogan.com',            notes:'Kogan First members',        expiresAt:new Date(Date.now()+10*864e5).toISOString().split('T')[0],savedAt:new Date().toISOString(),used:false,favourite:false,verified:false},
+  {id:uid(),store:'Woolworths',     code:'WOWFRESH',   discount:'$10 off',      type:'Fixed Amount', category:'food',      url:'https://woolworths.com.au',    notes:'Min. $100 spend online',     expiresAt:new Date(Date.now()+ 3*864e5).toISOString().split('T')[0],savedAt:new Date().toISOString(),used:true, favourite:false,verified:true },
+];
+
+const loadPromos = () => {
+  try {
+    const d = localStorage.getItem(PROMOS_STORAGE);
+    return d ? JSON.parse(d) : mkPromos();
+  } catch { return mkPromos(); }
+};
+
+/* ─── Tiny atoms ────────────────────────────────────────────────────────────── */
+const Chip = ({children, color=T.inkMid, bg='rgba(107,103,96,0.09)', dot}) => (
+  <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'2px 8px',borderRadius:99,fontSize:11,fontWeight:500,color,background:bg,whiteSpace:'nowrap',flexShrink:0}}>
+    {dot && <span style={{width:4,height:4,borderRadius:'50%',background:color,flexShrink:0}}/>}
+    {children}
+  </span>
+);
+
+const Btn = ({children, onClick, v='fill', sm, disabled, full, style:xs={}}) => {
+  const vs = {
+    fill:   {background:T.accent,   color:'#fff',   border:'none'},
+    outline:{background:'transparent',color:T.ink,  border:`1.5px solid ${T.rule}`},
+    ghost:  {background:T.bgWarm,   color:T.inkMid, border:'none'},
+    danger: {background:T.rose,     color:'#fff',   border:'none'},
+    soft:   {background:T.accentBg, color:T.accent, border:`1.5px solid ${T.accentBd}`},
+  };
+  return (
+    <button onClick={disabled?undefined:onClick} style={{
+      display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6,
+      minHeight:44, // iOS touch target
+      padding:sm?'0 14px':'0 18px',
+      borderRadius:12,fontWeight:600,fontSize:sm?13:15,
+      cursor:disabled?'not-allowed':'pointer',
+      width:full?'100%':'auto',opacity:disabled?0.4:1,
+      WebkitTapHighlightColor:'transparent',
+      letterSpacing:'-0.01em',...vs[v],...xs,
+    }}>{children}</button>
+  );
+};
+
+/* ─── Form controls ─────────────────────────────────────────────────────────── */
+const inputBase = () => ({
+  width:'100%', padding:'13px 14px',
+  background:T.bgWarm, border:`1.5px solid ${T.rule}`,
+  borderRadius:12, color:T.ink,
+  fontSize:16,
+  outline:'none', fontFamily:'inherit',
+  boxSizing:'border-box', WebkitAppearance:'none',
+});
+
+const Field = ({label, value, onChange, placeholder, type='text', multiline, required}) => (
+  <div style={{marginBottom:16}}>
+    {label && (
+      <label style={{display:'block',fontSize:12,fontWeight:600,color:T.inkMid,marginBottom:7,letterSpacing:'0.04em',textTransform:'uppercase'}}>
+        {label}{required&&<span style={{color:T.accent}}> *</span>}
+      </label>
+    )}
+    {multiline
+      ? <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+          rows={3} style={{...inputBase(),resize:'vertical',minHeight:80}}/>
+      : <input type={type} value={value} onChange={e=>onChange(e.target.value)}
+          placeholder={placeholder} style={inputBase()}/>
+    }
+  </div>
+);
+
+const DropField = ({label, value, onChange, options}) => (
+  <div style={{marginBottom:16}}>
+    {label && <label style={{display:'block',fontSize:12,fontWeight:600,color:T.inkMid,marginBottom:7,letterSpacing:'0.04em',textTransform:'uppercase'}}>{label}</label>}
+    <div style={{position:'relative'}}>
+      <select value={value} onChange={e=>onChange(e.target.value)}
+        style={{...inputBase(),paddingRight:40,appearance:'none',WebkitAppearance:'none'}}>
+        {options.map(o=><option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
+      </select>
+      <span style={{position:'absolute',right:13,top:'50%',transform:'translateY(-50%)',pointerEvents:'none',display:'flex'}}>
+        <Icon n="chvD" s={14} c={T.inkFaint}/>
+      </span>
+    </div>
+  </div>
+);
+
+/* ─── Bottom Sheet ──────────────────────────────────────────────────────────── */
+function Sheet({title, onClose, children, noPad}) {
+  return (
+    <div style={{position:'absolute',inset:0,zIndex:50,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(26,24,20,0.35)',backdropFilter:'blur(6px)',WebkitBackdropFilter:'blur(6px)'}}/>
+      {/* Panel */}
+      <div style={{position:'relative',background:T.surface,borderRadius:'20px 20px 0 0',maxHeight:'88%',display:'flex',flexDirection:'column',boxShadow:'0 -8px 40px rgba(0,0,0,0.12)',paddingBottom:'env(safe-area-inset-bottom)'}}>
+        {/* Handle */}
+        <div style={{display:'flex',justifyContent:'center',padding:'12px 0 4px',flexShrink:0}}>
+          <div style={{width:36,height:4,borderRadius:2,background:T.rule}}/>
+        </div>
+        {/* Title row */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 20px 12px',flexShrink:0}}>
+          <span style={{fontSize:18,fontWeight:700,color:T.ink,letterSpacing:'-0.03em'}}>{title}</span>
+          <button onClick={onClose} style={{width:36,height:36,borderRadius:10,background:T.bgWarm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',WebkitTapHighlightColor:'transparent'}}>
+            <Icon n="x" s={15} c={T.inkMid}/>
+          </button>
+        </div>
+        {/* Scrollable content */}
+        <div style={{overflowY:'auto',flex:1,WebkitOverflowScrolling:'touch',...(!noPad&&{padding:'0 20px 24px'})}}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Dialog ────────────────────────────────────────────────────────────────── */
+function Dialog({title, children, onClose}) {
+  return (
+    <div style={{position:'absolute',inset:0,zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:24}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(26,24,20,0.4)',backdropFilter:'blur(8px)',WebkitBackdropFilter:'blur(8px)'}}/>
+      <div style={{position:'relative',background:T.surface,borderRadius:18,padding:24,width:'100%',maxWidth:340,boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <span style={{fontSize:17,fontWeight:700,color:T.ink,letterSpacing:'-0.02em'}}>{title}</span>
+          <button onClick={onClose} style={{width:34,height:34,borderRadius:9,background:T.bgWarm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',WebkitTapHighlightColor:'transparent'}}>
+            <Icon n="x" s={14} c={T.inkMid}/>
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Promo Card ────────────────────────────────────────────────────────────── */
+function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onCopy}) {
+  const [copied,setCopied] = useState(false);
+  const cat   = CAT[promo.category] || CAT.other;
+  const exp   = promo.expiresAt ? new Date(promo.expiresAt) : null;
+  const dl    = exp ? Math.ceil((exp - new Date()) / 864e5) : null;
+  const isExp = dl !== null && dl < 0;
+  const isSoon= dl !== null && dl >= 0 && dl <= 3;
+
+  const copy = () => {
+    try { navigator.clipboard.writeText(promo.code); } catch {}
+    onCopy?.(promo.code);
+    setCopied(true);
+    setTimeout(()=>setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{
+      background:T.surface, borderRadius:16, padding:16, marginBottom:10,
+      border:`1.5px solid ${isSoon&&!isExp?`${T.gold}55`:T.rule}`,
+      opacity:promo.used?0.52:1,
+      boxShadow:promo.favourite&&!promo.used?`0 2px 16px rgba(232,93,38,0.07)`:'none',
+    }}>
+      {/* Store + badges */}
+      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:10,gap:8}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:15,fontWeight:700,color:T.ink,letterSpacing:'-0.02em',marginBottom:6}}>{promo.store}</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+            <Chip color={cat.color} bg={cat.bg}>{cat.label}</Chip>
+            <Chip color={T.inkMid} bg={T.bgWarm}>{promo.type}</Chip>
+            {promo.verified && <Chip color={T.emerald} bg={T.emeraldBg} dot>verified</Chip>}
+            {isExp          && <Chip color={T.rose}    bg={T.roseBg}    dot>expired</Chip>}
+            {isSoon&&!isExp && <Chip color={T.gold}    bg={T.goldBg}    dot>{dl===0?'today':`${dl}d left`}</Chip>}
+            {promo.used     && <Chip color={T.inkFaint} bg={T.bgWarm}>used</Chip>}
+          </div>
+        </div>
+        {/* Action icons — 44px tap targets */}
+        <div style={{display:'flex',gap:0,flexShrink:0,marginRight:-6}}>
+          <button onClick={()=>onToggleFav(promo.id)} style={{width:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',WebkitTapHighlightColor:'transparent'}}>
+            <Icon n={promo.favourite?'starF':'star'} s={18} c={promo.favourite?T.gold:T.inkFaint}/>
+          </button>
+          <button onClick={()=>onEdit(promo)} style={{width:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',WebkitTapHighlightColor:'transparent'}}>
+            <Icon n="edit" s={16} c={T.inkMid}/>
+          </button>
+        </div>
+      </div>
+
+      {/* Code row */}
+      <div style={{display:'flex',alignItems:'stretch',gap:8,marginBottom:10}}>
+        <div style={{flex:1,minWidth:0,padding:'11px 13px',background:T.bgWarm,borderRadius:12,border:`1.5px solid ${T.rule}`,display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+          <span style={{fontFamily:'monospace',fontWeight:700,fontSize:15,color:T.accent,letterSpacing:'0.06em',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{promo.code}</span>
+          <span style={{fontSize:12,color:T.inkMid,fontWeight:600,flexShrink:0}}>
+            {promo.type==='Percentage'?`${promo.discount}% off`:promo.discount}
+          </span>
+        </div>
+        <button onClick={copy} style={{
+          flexShrink:0, display:'flex',alignItems:'center',justifyContent:'center',gap:5,
+          padding:'0 14px', minHeight:44, borderRadius:12,
+          border:`1.5px solid ${copied?`${T.emerald}40`:T.accentBd}`,
+          background:copied?T.emeraldBg:T.accentBg,
+          color:copied?T.emerald:T.accent, fontSize:13,fontWeight:600,
+          cursor:'pointer',transition:'all 0.2s',WebkitTapHighlightColor:'transparent',
+        }}>
+          <Icon n={copied?'chk':'copy'} s={14} c={copied?T.emerald:T.accent} w={2}/>
+          {copied?'copied':'copy'}
+        </button>
+      </div>
+
+      {promo.notes && <p style={{fontSize:13,color:T.inkMid,marginBottom:10,lineHeight:1.5}}>{promo.notes}</p>}
+
+      {/* Footer */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:6}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          {exp&&!isExp && (
+            <span style={{fontSize:12,color:isSoon?T.gold:T.inkFaint,display:'flex',alignItems:'center',gap:4}}>
+              <Icon n="clock" s={12} c={isSoon?T.gold:T.inkFaint}/>{promo.expiresAt}
+            </span>
+          )}
+          {promo.url && (
+            <a href={promo.url} target="_blank" rel="noopener noreferrer"
+              style={{fontSize:12,color:T.sapphire,textDecoration:'none',display:'flex',alignItems:'center',gap:4}}>
+              <Icon n="link" s={12} c={T.sapphire}/>Visit store
+            </a>
+          )}
+        </div>
+        <div style={{display:'flex',gap:4}}>
+          <button onClick={()=>onToggleUsed(promo.id)} style={{minHeight:36,padding:'0 10px',display:'flex',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',fontSize:12,color:T.inkMid,WebkitTapHighlightColor:'transparent'}}>
+            <Icon n={promo.used?'undo':'chkC'} s={14} c={T.inkMid}/>{promo.used?'unmark':'mark used'}
+          </button>
+          <button onClick={()=>onDelete(promo.id)} style={{minHeight:36,width:36,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',WebkitTapHighlightColor:'transparent'}}>
+            <Icon n="del" s={14} c={T.rose}/>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Promo form ────────────────────────────────────────────────────────────── */
+function PromoForm({promo, onSave, onClose}) {
+  const [f,setF] = useState({
+    store:promo?.store||'', code:promo?.code||'', discount:promo?.discount||'',
+    type:promo?.type||'Percentage', category:promo?.category||'retail',
+    url:promo?.url||'', notes:promo?.notes||'', expiresAt:promo?.expiresAt||'',
+    verified:promo?.verified||false, favourite:promo?.favourite||false,
+  });
+  const set = (k,v) => setF(p=>({...p,[k]:v}));
+  const valid = f.store.trim() && f.code.trim();
+  const go = () => {
+    if(!valid) return;
+    onSave({...f, id:promo?.id||uid(), savedAt:promo?.savedAt||new Date().toISOString(), used:promo?.used||false});
+    onClose();
+  };
+
+  return (
+    <Sheet title={promo?'Edit promo':'Add promo'} onClose={onClose}>
+      <Field label="Store or service" value={f.store} onChange={v=>set('store',v)} placeholder="e.g. Amazon, Hulu…" required/>
+      <Field label="Promo code" value={f.code} onChange={v=>set('code',v.toUpperCase())} placeholder="SAVE20" required/>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+        <Field label="Discount" value={f.discount} onChange={v=>set('discount',v)} placeholder="20 or Free"/>
+        <DropField label="Type" value={f.type} onChange={v=>set('type',v)} options={TYPES.map(t=>({value:t,label:t}))}/>
+      </div>
+      <DropField label="Category" value={f.category} onChange={v=>set('category',v)} options={CATS.map(c=>({value:c.id,label:c.label}))}/>
+      <Field label="Store URL" value={f.url} onChange={v=>set('url',v)} placeholder="https://…" type="url"/>
+      <Field label="Expiry date" value={f.expiresAt} onChange={v=>set('expiresAt',v)} type="date"/>
+      <Field label="Notes" value={f.notes} onChange={v=>set('notes',v)} placeholder="Any restrictions or details…" multiline/>
+      <div style={{display:'flex',gap:20,marginBottom:20}}>
+        {[['verified','Verified','chkC',T.emerald],['favourite','Favourite','starF',T.gold]].map(([k,label,icon,c])=>(
+          <label key={k} style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',minHeight:44}}>
+            <div onClick={()=>set(k,!f[k])} style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${f[k]?c:T.rule}`,background:f[k]?c:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              {f[k] && <Icon n="chk" s={12} c="#fff" w={2.5}/>}
+            </div>
+            <span style={{fontSize:14,color:T.inkMid}}>{label}</span>
+          </label>
+        ))}
+      </div>
+      <Btn onClick={go} full disabled={!valid}>{promo?'Save changes':'Add promo'}</Btn>
+    </Sheet>
+  );
+}
+
+/* ─── AI Hunt ───────────────────────────────────────────────────────────────── */
+/* ─── API key helpers (localStorage only, never leaves device) ──────────────── */
+const API_KEY_STORAGE    = 'promohunter_apikey';
+const WORKER_URL_STORAGE = 'promohunter_worker_url';
+const loadApiKey    = () => { try { return localStorage.getItem(API_KEY_STORAGE)||''; } catch { return ''; } };
+const saveApiKey    = k  => { try { localStorage.setItem(API_KEY_STORAGE, k); } catch {} };
+const loadWorkerUrl = () => { try { return localStorage.getItem(WORKER_URL_STORAGE)||''; } catch { return ''; } };
+const saveWorkerUrl = u  => { try { localStorage.setItem(WORKER_URL_STORAGE, u.trim().replace(/\/+$/,'')); } catch {} };
+
+/* ─── API Key Setup Sheet ───────────────────────────────────────────────────── */
+function ApiKeySheet({onClose, onSaved}) {
+  const [key, setKey] = useState(loadApiKey);
+  const [show, setShow] = useState(false);
+  const masked = key ? key.slice(0,7)+'…'+key.slice(-4) : '';
+  const valid  = key.startsWith('sk-ant-') && key.length > 20;
+
+  const save = () => { saveApiKey(key.trim()); onSaved(key.trim()); onClose(); };
+  const clear = () => { saveApiKey(''); setKey(''); };
+
+  return (
+    <Sheet title="Anthropic API key" onClose={onClose}>
+      <div style={{padding:'14px 16px',background:T.sapphireBg,borderRadius:12,border:`1px solid ${T.sapphire}30`,marginBottom:20,display:'flex',gap:10,alignItems:'flex-start'}}>
+        <Icon n="info" s={15} c={T.sapphire}/>
+        <div style={{flex:1}}>
+          <p style={{fontSize:13,color:T.sapphire,lineHeight:1.6,margin:0}}>
+            AI Hunt calls the Anthropic API directly from your device. Your key is stored <strong>only in this app</strong> — it is never sent anywhere except Anthropic's servers.
+          </p>
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer"
+            style={{fontSize:12,color:T.sapphire,display:'inline-flex',alignItems:'center',gap:4,marginTop:6,textDecoration:'none',fontWeight:600}}>
+            <Icon n="link" s={12} c={T.sapphire}/>Get your key at console.anthropic.com
+          </a>
+        </div>
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <label style={{display:'block',fontSize:12,fontWeight:600,color:T.inkMid,marginBottom:7,letterSpacing:'0.04em',textTransform:'uppercase'}}>
+          API Key <span style={{color:T.accent}}>*</span>
+        </label>
+        <div style={{position:'relative'}}>
+          <input
+            type={show ? 'text' : 'password'}
+            value={key}
+            onChange={e=>setKey(e.target.value.trim())}
+            placeholder="sk-ant-api03-…"
+            style={{...inputBase(), paddingRight:52, fontFamily:'monospace', letterSpacing: show?'0':'0.05em'}}
+          />
+          <button onClick={()=>setShow(s=>!s)} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',width:36,height:36,background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',color:T.inkMid}}>
+            <Icon n={show?'eyeOff':'eye'} s={16} c={T.inkMid}/>
+          </button>
+        </div>
+        {key && !valid && (
+          <p style={{fontSize:12,color:T.rose,marginTop:6,display:'flex',alignItems:'center',gap:4}}>
+            <Icon n="info" s={12} c={T.rose}/>Key should start with <code style={{fontFamily:'monospace'}}>sk-ant-</code>
+          </p>
+        )}
+        {key && valid && (
+          <p style={{fontSize:12,color:T.emerald,marginTop:6,display:'flex',alignItems:'center',gap:4}}>
+            <Icon n="chk" s={12} c={T.emerald} w={2.5}/>Looks good — {masked}
+          </p>
+        )}
+      </div>
+
+      <Btn onClick={save} full disabled={!valid} style={{marginBottom:10}}>Save & use key</Btn>
+      {loadApiKey() && (
+        <Btn onClick={clear} v="outline" full style={{marginBottom:16}}>Remove saved key</Btn>
+      )}
+
+      <div style={{padding:'12px 14px',background:T.goldBg,borderRadius:10,border:`1px solid ${T.gold}30`,display:'flex',gap:8,alignItems:'flex-start'}}>
+        <div style={{flexShrink:0,marginTop:1}}><Icon n="shld" s={14} c={T.gold}/></div>
+        <p style={{fontSize:11,color:T.gold,lineHeight:1.7,margin:0}}>
+          Your key is stored in your browser's localStorage and only ever sent to <strong>api.anthropic.com</strong>. Uninstalling the app or clearing browser data removes it permanently.
+        </p>
+      </div>
+    </Sheet>
+  );
+}
+
+const REGIONS = [
+  {value:'AU', label:'🇦🇺 Australia'},
+  {value:'US', label:'🇺🇸 United States'},
+  {value:'UK', label:'🇬🇧 United Kingdom'},
+  {value:'NZ', label:'🇳🇿 New Zealand'},
+  {value:'CA', label:'🇨🇦 Canada'},
+  {value:'SG', label:'🇸🇬 Singapore'},
+];
+
+const REGION_CONTEXT = {
+  AU: 'Australia. Use AUD pricing. Focus on AU retailers like JB Hi-Fi, The Iconic, Chemist Warehouse, Kogan, Catch, Myer, David Jones, Cotton On, Woolworths, Coles, Menulog, DoorDash AU, Bunnings, Harvey Norman, Officeworks, Dan Murphy\'s, BCF, rebel sport.',
+  US: 'United States. Use USD pricing. Focus on US retailers like Amazon, Target, Walmart, Best Buy, Nike, Gap, DoorDash, Uber Eats.',
+  UK: 'United Kingdom. Use GBP pricing. Focus on UK retailers like ASOS, Boots, Argos, John Lewis, Deliveroo, Just Eat, Currys.',
+  NZ: 'New Zealand. Use NZD pricing. Focus on NZ retailers like The Warehouse, Farmers, Noel Leeming, PB Tech, Countdown.',
+  CA: 'Canada. Use CAD pricing. Focus on Canadian retailers like Canadian Tire, Sport Chek, Hudson\'s Bay, Indigo, Skip The Dishes.',
+  SG: 'Singapore. Use SGD pricing. Focus on SG retailers like Lazada, Shopee, FairPrice, Redmart, Grab Food.',
+};
+
+function HuntSheet({onClose, onAddPromos}) {
+  const [q,setQ]               = useState('');
+  const [cat,setCat]           = useState('retail');
+  const [region,setRegion]     = useState('AU');
+  const [loading,setLoading]   = useState(false);
+  const [results,setResults]   = useState(null);
+  const [err,setErr]           = useState('');
+  const [saved,setSaved]       = useState(new Set());
+  const [apiKey,setApiKey]     = useState(loadApiKey);
+  const [showKeySheet,setShowKeySheet] = useState(false);
+
+  const hunt = async () => {
+    if(!q.trim()) return;
+    if(!apiKey) { setShowKeySheet(true); return; }
+    setLoading(true); setErr(''); setResults(null);
+    const catLabel  = CATS.find(c=>c.id===cat)?.label;
+    const store     = q.trim();
+    const today     = new Date().toDateString();
+    const workerUrl = loadWorkerUrl();
+
+    try {
+      // ── Route A: Cloudflare Worker (scrapes live sites) ───────────────────
+      if(workerUrl) {
+        const r = await fetch(`${workerUrl}/hunt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ store, region, category: cat, apiKey }),
+        });
+        const d = await r.json();
+        if(d.error) {
+          setErr(d.auth ? 'Invalid API key. Tap "Change API key" to update it.' : `Worker error: ${d.error}`);
+          setLoading(false); return;
+        }
+        setResults(Array.isArray(d.deals) ? d.deals : []);
+        setLoading(false); return;
+      }
+
+      // ── Route B: Direct Claude call (knowledge-based, no worker) ─────────
+      const prompt = `You are PromoHunter AI, an expert in ${region} retail discounts and promo codes.
+
+The user wants ALL known promo codes and deals for: "${store}" in ${region} (${catLabel} category).
+Today is ${today}.
+
+Instructions:
+1. Think carefully about everything you know about "${store}" — their app discounts, loyalty programs, partner codes, seasonal promotions, and any codes shared publicly on OzBargain, RetailMeNot, Groupon, or the store's own promotions page.
+2. For parking companies (Wilson Parking, Secure Parking, Care Park, Wilsons etc): include ALL known codes such as corporate codes, app codes, hotel/venue partner codes, event codes, and widely-shared codes like MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY, and any others you know of.
+3. Include codes even if you are unsure they are still active — set verified:false and note "Unconfirmed — worth trying". Users prefer a code to test over nothing.
+4. Include automatic discounts too (no code needed): app booking discounts, pre-booking rates, early bird pricing, monthly pass deals.
+5. Do NOT invent random codes. Only include codes you actually have knowledge of.
+
+Return ONLY a valid JSON array. No markdown, no backticks, no explanation outside the array.
+
+Each item must be exactly:
+{"store":"${store}","code":"PROMOCODE or empty string if no code needed","discount":"clear description e.g. 20% off, $5 off, Free first hour","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${cat}","notes":"how to use, restrictions, where seen e.g. OzBargain post","verified":true or false,"expiresAt":"YYYY-MM-DD if known else empty string","sourceUrl":""}
+
+Return up to 10 results. If you have zero knowledge of any real codes or deals, return [].`;
+
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 2000,
+          messages: [{ role: 'user', content: prompt }],
+        })
+      });
+      const d = await r.json();
+      if(d.error) {
+        setErr(d.error.type==='authentication_error'
+          ? 'Invalid API key. Tap "Change API key" to update it.'
+          : `API error: ${d.error.message||d.error.type}`);
+        setLoading(false); return;
+      }
+      const raw   = (d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+      const clean = raw.replace(/```json|```/g,'').trim();
+      const match = clean.match(/\[[\s\S]*\]/);
+      if(!match) { setResults([]); setLoading(false); return; }
+      const parsed = JSON.parse(match[0]);
+      setResults(Array.isArray(parsed) ? parsed : []);
+
+    } catch(e) {
+      console.error(e);
+      setErr('Connection failed — check your internet and try again.');
+    }
+    setLoading(false);
+  };
+
+  const saveOne = p => {
+    onAddPromos([{...p,id:uid(),savedAt:new Date().toISOString(),used:false,favourite:false,url:''}]);
+    setSaved(s=>new Set([...s,p.code]));
+  };
+  const saveAll = () => {
+    const ts = (results||[]).filter(p=>!saved.has(p.code)).map(p=>({...p,id:uid(),savedAt:new Date().toISOString(),used:false,favourite:false,url:''}));
+    onAddPromos(ts);
+    setSaved(new Set((results||[]).map(p=>p.code)));
+  };
+
+  return (
+    <Sheet title="AI promo hunt" onClose={onClose}>
+      {/* API key status banner */}
+      {apiKey ? (
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',background:T.emeraldBg,borderRadius:12,border:`1px solid ${T.emerald}30`,marginBottom:16,gap:10}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <Icon n="shld" s={14} c={T.emerald}/>
+            <span style={{fontSize:12,color:T.emerald,fontWeight:600}}>API key connected</span>
+          </div>
+          <button onClick={()=>setShowKeySheet(true)} style={{background:'none',border:'none',cursor:'pointer',fontSize:12,color:T.emerald,fontWeight:600,textDecoration:'underline',padding:0}}>Change</button>
+        </div>
+      ) : (
+        <div style={{padding:'14px 16px',background:T.roseBg,borderRadius:12,border:`1px solid ${T.rose}30`,marginBottom:16}}>
+          <p style={{fontSize:13,color:T.rose,fontWeight:600,marginBottom:6}}>API key required</p>
+          <p style={{fontSize:12,color:T.rose,lineHeight:1.6,marginBottom:10}}>AI Hunt needs your Anthropic API key to search for deals. It's stored only on your device.</p>
+          <Btn onClick={()=>setShowKeySheet(true)} v="danger" sm>Set up API key →</Btn>
+        </div>
+      )}
+
+      <p style={{fontSize:14,color:T.inkMid,marginBottom:16,lineHeight:1.65}}>Describe any store and Claude will suggest realistic codes tailored to your region.</p>
+
+      {/* Region + Category row */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+        <DropField label="Region" value={region} onChange={setRegion} options={REGIONS}/>
+        <DropField label="Category" value={cat} onChange={setCat} options={CATS.map(c=>({value:c.id,label:c.label}))}/>
+      </div>
+
+      <Field label="Hunt for deals at…" value={q} onChange={setQ} placeholder={region==='AU'?'e.g. JB Hi-Fi, Kogan, The Iconic…':'e.g. Adidas, Hulu, DoorDash…'} required/>
+      <Btn onClick={hunt} full disabled={loading||!q.trim()||!apiKey} style={{marginBottom:8}}>
+        {loading ? 'Hunting…' : <><Icon n="zap" s={16} c="#fff" w={2}/>Hunt for promos</>}
+      </Btn>
+
+      {showKeySheet && <ApiKeySheet onClose={()=>setShowKeySheet(false)} onSaved={k=>{ setApiKey(k); setErr(''); }}/>}
+
+      {loading && (
+        <div style={{textAlign:'center',padding:'32px 0'}}>
+          <div style={{width:28,height:28,border:`2.5px solid ${T.rule}`,borderTopColor:T.accent,borderRadius:'50%',animation:'spin 0.7s linear infinite',margin:'0 auto 12px'}}/>
+          <p style={{fontSize:13,color:T.inkMid}}>{loadWorkerUrl() ? 'Scraping live coupon sites…' : 'Searching for deals…'}</p>
+        </div>
+      )}
+      {err && (
+        <div style={{display:'flex',alignItems:'flex-start',gap:8,marginTop:12,padding:13,background:T.roseBg,borderRadius:12,border:`1px solid ${T.rose}30`}}>
+          <Icon n="info" s={15} c={T.rose}/>
+          <p style={{fontSize:13,color:T.rose,margin:0,lineHeight:1.5}}>{err}</p>
+        </div>
+      )}
+
+      {results && results.length > 0 && (
+        <div style={{marginTop:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <span style={{fontWeight:700,color:T.ink,fontSize:15,letterSpacing:'-0.02em'}}>Found {results.length} deals</span>
+            <Btn onClick={saveAll} sm v="outline">Save all</Btn>
+          </div>
+          {results.map((p,i)=>{
+            const isSaved = saved.has(p.code);
+            const c = CAT[p.category]||CAT.other;
+            return (
+              <div key={i} style={{background:T.bgWarm,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.rule}`}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,marginBottom:8}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,color:T.ink,fontSize:15,letterSpacing:'-0.01em',marginBottom:5}}>{p.store}</div>
+                    <div style={{display:'flex',gap:5,flexWrap:'wrap'}}><Chip color={c.color} bg={c.bg}>{c.label}</Chip><Chip color={T.inkMid} bg={T.surface}>{p.type}</Chip></div>
+                  </div>
+                  <Btn onClick={()=>saveOne(p)} sm v={isSaved?'ghost':'fill'} disabled={isSaved} style={{flexShrink:0}}>
+                    {isSaved?<><Icon n="chk" s={13} c={T.inkMid} w={2.5}/>Saved</>:<>+ Save</>}
+                  </Btn>
+                </div>
+                <div style={{fontFamily:'monospace',fontWeight:700,fontSize:15,color:T.accent,marginBottom:4}}>
+                  {p.code || <span style={{fontStyle:'italic',fontWeight:500,fontSize:13,color:T.inkMid}}>Auto-applied at checkout</span>}
+                </div>
+                <div style={{fontSize:13,color:T.inkMid,marginBottom:p.notes?4:0}}>
+                  {p.type==='Percentage'?`${p.discount}% off`:p.discount}
+                </div>
+                {p.notes&&<p style={{fontSize:12,color:T.inkMid,lineHeight:1.5,margin:'4px 0 0'}}>{p.notes}</p>}
+                <div style={{display:'flex',alignItems:'center',gap:10,marginTop:6,flexWrap:'wrap'}}>
+                  {p.expiresAt&&<span style={{fontSize:12,color:T.inkFaint,display:'flex',alignItems:'center',gap:4}}><Icon n="clock" s={11} c={T.inkFaint}/>Expires {p.expiresAt}</span>}
+                  {p.sourceUrl&&<a href={p.sourceUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:T.sapphire,display:'flex',alignItems:'center',gap:4,textDecoration:'none'}}><Icon n="link" s={11} c={T.sapphire}/>Source</a>}
+                  {p.verified&&<span style={{fontSize:11,color:T.emerald,display:'flex',alignItems:'center',gap:3,fontWeight:600}}><Icon n="chk" s={11} c={T.emerald} w={2.5}/>Live find</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {results && results.length===0 && (
+        <p style={{color:T.inkMid,fontSize:14,marginTop:20,textAlign:'center'}}>No results found. Try a different search.</p>
+      )}
+      <div style={{marginTop:16,padding:14,background:T.goldBg,borderRadius:12,border:`1px solid ${T.gold}30`,display:'flex',gap:10,alignItems:'flex-start'}}>
+        <div style={{flexShrink:0,marginTop:1}}><Icon n="info" s={15} c={T.gold}/></div>
+        <p style={{fontSize:12,color:T.gold,lineHeight:1.7,margin:0}}>Claude searches the web for real deals in {REGIONS.find(r=>r.value===region)?.label||region}. Results marked <strong>Live find</strong> were found on actual sites — still verify at checkout as codes can expire quickly.</p>
+      </div>
+    </Sheet>
+  );
+}
+
+/* ─── Stats tab ─────────────────────────────────────────────────────────────── */
+function StatsTab({promos}) {
+  const now   = new Date();
+  const dl    = p => p.expiresAt ? Math.ceil((new Date(p.expiresAt)-now)/864e5) : null;
+  const isExp = p => p.expiresAt && new Date(p.expiresAt)<now;
+  const active   = promos.filter(p=>!p.used&&!isExp(p));
+  const used     = promos.filter(p=>p.used);
+  const soon     = promos.filter(p=>!p.used&&dl(p)!==null&&dl(p)>=0&&dl(p)<=7);
+  const verified = promos.filter(p=>p.verified);
+  const favs     = promos.filter(p=>p.favourite&&!p.used&&!isExp(p));
+  const catBreak = CATS.map(c=>({...c,n:promos.filter(p=>p.category===c.id).length})).filter(c=>c.n>0).sort((a,b)=>b.n-a.n);
+  const recent   = [...promos].sort((a,b)=>new Date(b.savedAt)-new Date(a.savedAt)).slice(0,5);
+
+  const StatCard = ({icon, value, label, color}) => (
+    <div style={{background:T.surface,borderRadius:14,padding:'16px 14px',border:`1.5px solid ${T.rule}`}}>
+      <div style={{width:34,height:34,borderRadius:10,background:`${color}14`,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12}}>
+        <Icon n={icon} s={17} c={color}/>
+      </div>
+      <div style={{fontSize:32,fontWeight:800,color:T.ink,lineHeight:1,letterSpacing:'-0.05em',marginBottom:5}}>{value}</div>
+      <div style={{fontSize:12,color:T.inkMid,fontWeight:500}}>{label}</div>
+    </div>
+  );
+
+  const Card = ({icon, iconColor=T.inkMid, title, children}) => (
+    <div style={{background:T.surface,borderRadius:14,padding:16,marginBottom:10,border:`1.5px solid ${T.rule}`}}>
+      <div style={{fontWeight:700,fontSize:14,color:T.ink,marginBottom:14,letterSpacing:'-0.02em',display:'flex',alignItems:'center',gap:8}}>
+        <Icon n={icon} s={14} c={iconColor}/>{title}
+      </div>
+      {children}
+    </div>
+  );
+
+  return (
+    <div style={{overflowY:'auto',flex:1,padding:'12px 16px 24px',WebkitOverflowScrolling:'touch'}}>
+      {/* Stat grid */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+        <StatCard icon="tag"  value={active.length}   label="Active deals"  color={T.emerald}/>
+        <StatCard icon="zap"  value={soon.length}     label="Expiring soon" color={T.gold}/>
+        <StatCard icon="chk"  value={used.length}     label="Used"          color={T.violet}/>
+        <StatCard icon="shld" value={verified.length} label="Verified"      color={T.sapphire}/>
+      </div>
+
+      {catBreak.length>0 && (
+        <Card icon="bars" title="By category">
+          {catBreak.map(c=>(
+            <div key={c.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+              <span style={{fontSize:12,color:T.inkMid,width:62,flexShrink:0}}>{c.label}</span>
+              <div style={{flex:1,height:5,background:T.bgWarm,borderRadius:3,overflow:'hidden'}}>
+                <div style={{height:'100%',background:c.color,borderRadius:3,width:`${Math.round((c.n/promos.length)*100)}%`,opacity:0.7}}/>
+              </div>
+              <span style={{fontSize:12,color:T.inkFaint,width:16,textAlign:'right'}}>{c.n}</span>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {favs.length>0 && (
+        <Card icon="starF" iconColor={T.gold} title="Favourites">
+          {favs.slice(0,4).map(p=>{
+            const c=CAT[p.category]||CAT.other;
+            return (
+              <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,padding:'10px 12px',background:T.bgWarm,borderRadius:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,color:T.ink}}>{p.store}</div>
+                  <div style={{fontFamily:'monospace',fontSize:12,color:T.accent,marginTop:2}}>{p.code}</div>
+                </div>
+                <Chip color={c.color} bg={c.bg}>{p.type==='Percentage'?`${p.discount}%`:p.discount}</Chip>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {soon.length>0 && (
+        <div style={{background:T.goldBg,borderRadius:14,padding:16,marginBottom:10,border:`1px solid ${T.gold}30`}}>
+          <div style={{fontWeight:700,fontSize:14,color:T.gold,marginBottom:12,display:'flex',alignItems:'center',gap:8}}>
+            <Icon n="zap" s={14} c={T.gold} w={2}/>Expiring this week
+          </div>
+          {soon.map(p=>(
+            <div key={p.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,gap:8}}>
+              <div style={{flex:1,minWidth:0}}>
+                <span style={{fontWeight:600,fontSize:14,color:T.ink}}>{p.store} </span>
+                <span style={{fontFamily:'monospace',fontSize:12,color:T.accent}}>{p.code}</span>
+              </div>
+              <Chip color={T.gold} bg={`${T.gold}18`}>{dl(p)===0?'today':`${dl(p)}d`}</Chip>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {recent.length>0 && (
+        <Card icon="clock" title="Recently added">
+          {recent.map(p=>{
+            const c=CAT[p.category]||CAT.other;
+            return (
+              <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <div style={{width:6,height:6,borderRadius:'50%',background:c.color,flexShrink:0,opacity:0.8}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <span style={{fontWeight:600,fontSize:14,color:T.ink}}>{p.store}</span>
+                  <span style={{fontSize:11,color:T.inkFaint,marginLeft:6}}>{new Date(p.savedAt).toLocaleDateString()}</span>
+                </div>
+                <span style={{fontFamily:'monospace',fontSize:12,color:T.accent,flexShrink:0}}>{p.code}</span>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ─── Promos tab ────────────────────────────────────────────────────────────── */
+function PromosTab({promos, onUpdate}) {
+  const [search,  setSearch]  = useState('');
+  const [fCat,    setFCat]    = useState('all');
+  const [fStatus, setFStatus] = useState('active');
+  const [editP,   setEditP]   = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [delId,   setDelId]   = useState(null);
+  const [toast,   setToast]   = useState('');
+  const searchRef = useRef(null);
+
+  const now = new Date();
+  const filtered = useMemo(()=>{
+    return promos.filter(p=>{
+      const exp   = p.expiresAt ? new Date(p.expiresAt) : null;
+      const isExp = exp && exp < now;
+      if(fStatus==='active'    && (p.used||isExp)) return false;
+      if(fStatus==='used'      && !p.used)          return false;
+      if(fStatus==='expired'   && !isExp)           return false;
+      if(fStatus==='favourites'&& !p.favourite)     return false;
+      if(fCat!=='all' && p.category!==fCat)         return false;
+      if(search){
+        const q=search.toLowerCase();
+        return p.store.toLowerCase().includes(q)||p.code.toLowerCase().includes(q)||(p.notes||'').toLowerCase().includes(q);
+      }
+      return true;
+    }).sort((a,b)=>{
+      if(a.favourite&&!b.favourite) return -1;
+      if(!a.favourite&&b.favourite) return  1;
+      return new Date(b.savedAt)-new Date(a.savedAt);
+    });
+  },[promos,search,fCat,fStatus]);
+
+  const saveP   = p   => onUpdate(ps=>ps.some(x=>x.id===p.id)?ps.map(x=>x.id===p.id?{...p}:x):[...ps,p]);
+  const delP    = id  => { onUpdate(ps=>ps.filter(p=>p.id!==id)); setDelId(null); };
+  const togUsed = id  => onUpdate(ps=>ps.map(p=>p.id===id?{...p,used:!p.used}:p));
+  const togFav  = id  => onUpdate(ps=>ps.map(p=>p.id===id?{...p,favourite:!p.favourite}:p));
+  const copied  = code => { setToast(code); setTimeout(()=>setToast(''),2200); };
+
+  const statuses = ['active','used','expired','favourites'];
+  const catOpts  = [{id:'all',label:'All'},...CATS];
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',position:'relative'}}>
+
+      {/* ── Search bar ── */}
+      <div style={{padding:'10px 16px 6px',flexShrink:0}}>
+        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+          <span style={{position:'absolute',left:13,pointerEvents:'none',display:'flex',top:'50%',transform:'translateY(-50%)'}}>
+            <Icon n="srch" s={16} c={T.inkFaint}/>
+          </span>
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={e=>setSearch(e.target.value)}
+            placeholder="Search stores or codes…"
+            style={{
+              ...inputBase(),
+              paddingLeft:42,
+              paddingRight:search?42:16,
+            }}
+          />
+          {search && (
+            <button onClick={()=>{ setSearch(''); searchRef.current?.blur(); }}
+              style={{position:'absolute',right:4,top:'50%',transform:'translateY(-50%)',width:36,height:36,display:'flex',alignItems:'center',justifyContent:'center',background:'none',border:'none',cursor:'pointer',WebkitTapHighlightColor:'transparent'}}>
+              <Icon n="x" s={15} c={T.inkFaint}/>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Status filter ── */}
+      <div style={{display:'flex',gap:6,padding:'0 16px 6px',overflowX:'auto',flexShrink:0,scrollbarWidth:'none',WebkitOverflowScrolling:'touch'}}>
+        {statuses.map(s=>(
+          <button key={s} onClick={()=>setFStatus(s)} style={{
+            padding:'0 14px',height:36,borderRadius:99,flexShrink:0,
+            border:`1.5px solid ${fStatus===s?T.accent:T.rule}`,
+            background:fStatus===s?T.accentBg:T.surface,
+            color:fStatus===s?T.accent:T.inkMid,
+            fontSize:13,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',
+            textTransform:'capitalize',WebkitTapHighlightColor:'transparent',
+          }}>{s}</button>
+        ))}
+      </div>
+
+      {/* ── Category filter ── */}
+      <div style={{display:'flex',gap:6,padding:'0 16px 10px',overflowX:'auto',flexShrink:0,scrollbarWidth:'none',WebkitOverflowScrolling:'touch'}}>
+        {catOpts.map(c=>{
+          const m=CAT[c.id]; const active=fCat===c.id;
+          return (
+            <button key={c.id} onClick={()=>setFCat(c.id)} style={{
+              padding:'0 12px',height:32,borderRadius:99,flexShrink:0,
+              border:`1.5px solid ${active?(m?.color||T.accent):T.rule}`,
+              background:active?(m?.bg||T.accentBg):T.surface,
+              color:active?(m?.color||T.accent):T.inkMid,
+              fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',
+              WebkitTapHighlightColor:'transparent',
+            }}>{c.label}</button>
+          );
+        })}
+      </div>
+
+      {/* ── Results count ── */}
+      {search && (
+        <div style={{padding:'0 16px 6px',flexShrink:0}}>
+          <span style={{fontSize:12,color:T.inkMid}}>
+            {filtered.length} {filtered.length===1?'result':'results'} for "<strong style={{color:T.ink}}>{search}</strong>"
+          </span>
+        </div>
+      )}
+
+      {/* ── Toast ── */}
+      {toast && (
+        <div style={{position:'absolute',top:12,left:'50%',transform:'translateX(-50%)',background:T.emerald,color:'#fff',padding:'9px 18px',borderRadius:99,fontSize:13,fontWeight:600,zIndex:40,whiteSpace:'nowrap',pointerEvents:'none',display:'flex',alignItems:'center',gap:6,boxShadow:'0 4px 16px rgba(42,125,79,0.3)'}}>
+          <Icon n="chk" s={14} c="#fff" w={2.5}/>Copied: {toast}
+        </div>
+      )}
+
+      {/* ── Promo list ── */}
+      <div style={{flex:1,overflowY:'auto',padding:'0 16px 100px',WebkitOverflowScrolling:'touch'}}>
+        {filtered.length===0 ? (
+          <div style={{textAlign:'center',padding:'56px 20px 20px'}}>
+            <div style={{width:56,height:56,borderRadius:16,background:T.bgWarm,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 16px'}}>
+              <Icon n="tag" s={24} c={T.inkFaint}/>
+            </div>
+            <div style={{fontWeight:700,color:T.inkMid,fontSize:16,letterSpacing:'-0.02em',marginBottom:6}}>
+              {search ? 'No matches' : 'No promos yet'}
+            </div>
+            <div style={{fontSize:13,color:T.inkFaint}}>
+              {search ? `Try a different search term` : 'Tap + to add your first deal'}
+            </div>
+          </div>
+        ) : filtered.map(p=>(
+          <PromoCard key={p.id} promo={p}
+            onEdit={setEditP} onDelete={setDelId}
+            onToggleUsed={togUsed} onToggleFav={togFav} onCopy={copied}/>
+        ))}
+      </div>
+
+      {/* ── FAB ── */}
+      <button onClick={()=>setShowAdd(true)} style={{
+        position:'absolute',right:20,bottom:24,
+        width:56,height:56,borderRadius:28,
+        background:T.accent,border:'none',
+        boxShadow:`0 4px 24px rgba(232,93,38,0.4)`,
+        cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',
+        zIndex:20,WebkitTapHighlightColor:'transparent',
+      }}>
+        <Icon n="plus" s={22} c="#fff" w={2.5}/>
+      </button>
+
+      {/* ── Sheets / modals ── */}
+      {editP   && <PromoForm promo={editP} onSave={p=>{saveP(p);setEditP(null);}} onClose={()=>setEditP(null)}/>}
+      {showAdd && <PromoForm onSave={p=>{saveP(p);setShowAdd(false);}} onClose={()=>setShowAdd(false)}/>}
+      {delId   && (
+        <Dialog title="Delete promo?" onClose={()=>setDelId(null)}>
+          <p style={{color:T.inkMid,fontSize:14,marginBottom:20,lineHeight:1.6}}>This will permanently remove this promo from your collection.</p>
+          <div style={{display:'flex',gap:10}}>
+            <Btn onClick={()=>setDelId(null)} v="outline" full>Cancel</Btn>
+            <Btn onClick={()=>delP(delId)} v="danger" full>Delete</Btn>
+          </div>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+/* ─── Settings ──────────────────────────────────────────────────────────────── */
+function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark}) {
+  const [cc,setCc] = useState(false);
+  const [showKey,setShowKey]         = useState(false);
+  const [hasKey,setHasKey]           = useState(()=>!!loadApiKey());
+  const [workerUrl,setWorkerUrl]     = useState(loadWorkerUrl);
+  const [editWorker,setEditWorker]   = useState(false);
+  const [workerInput,setWorkerInput] = useState(loadWorkerUrl);
+
+  // Toggle pill component
+  const Toggle = ({on, onToggle}) => (
+    <button onClick={onToggle} style={{
+      width:44, height:26, borderRadius:13, padding:3,
+      background: on ? T.accent : T.rule,
+      border:'none', cursor:'pointer', flexShrink:0,
+      display:'flex', alignItems:'center',
+      justifyContent: on ? 'flex-end' : 'flex-start',
+      transition:'background 0.2s',
+      WebkitTapHighlightColor:'transparent',
+    }}>
+      <div style={{width:20,height:20,borderRadius:10,background:'#fff',boxShadow:'0 1px 4px rgba(0,0,0,0.2)',transition:'all 0.2s'}}/>
+    </button>
+  );
+
+  const SH = ({t}) => (
+    <div style={{fontSize:11,fontWeight:700,color:T.inkFaint,letterSpacing:'0.07em',textTransform:'uppercase',marginBottom:4,marginTop:20,paddingBottom:6,borderBottom:`1px solid ${T.rule}`}}>
+      {t}
+    </div>
+  );
+
+  const Row = ({icon, label, sub, right, onClick, danger}) => (
+    <button onClick={onClick} style={{
+      width:'100%',display:'flex',alignItems:'center',gap:14,
+      minHeight:56,padding:'0',
+      background:'none',border:'none',cursor:onClick?'pointer':'default',
+      textAlign:'left',borderBottom:`1px solid ${T.rule}`,
+      WebkitTapHighlightColor:'transparent',
+    }}>
+      <div style={{width:36,height:36,borderRadius:10,background:danger?T.roseBg:T.bgWarm,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+        <Icon n={icon} s={17} c={danger?T.rose:T.inkMid}/>
+      </div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:600,fontSize:15,color:danger?T.rose:T.ink,letterSpacing:'-0.01em'}}>{label}</div>
+        {sub && <div style={{fontSize:12,color:T.inkFaint,marginTop:1}}>{sub}</div>}
+      </div>
+      {right ?? (onClick && <Icon n="arr" s={14} c={T.inkFaint}/>)}
+    </button>
+  );
+
+  return (
+    <Sheet title="Settings" onClose={onClose}>
+      <SH t="Data"/>
+      <Row icon="del"  label="Clear all promos"  sub="Resets to sample data"  danger onClick={()=>setCc(true)}/>
+      <SH t="AI Hunt"/>
+      <Row icon="bot"  label="Anthropic API key"  sub={hasKey ? 'Key saved — tap to change' : 'Required for AI Hunt'} onClick={()=>setShowKey(true)}/>
+      <Row icon="link" label="Cloudflare Worker URL" sub={workerUrl ? '✓ Connected — live scraping enabled' : 'Optional — enables live deal scraping'} onClick={()=>setEditWorker(e=>!e)}/>
+      {editWorker && (
+        <div style={{padding:'12px 0 16px'}}>
+          <p style={{fontSize:12,color:T.inkMid,marginBottom:10,lineHeight:1.6}}>
+            Paste your Worker URL to enable live coupon site scraping. Without it, Hunt uses Claude's training knowledge only.
+          </p>
+          <div style={{display:'flex',gap:8}}>
+            <input
+              value={workerInput}
+              onChange={e=>setWorkerInput(e.target.value)}
+              placeholder="https://promohunter-worker.yourname.workers.dev"
+              style={{...inputBase(), flex:1, fontSize:13}}
+            />
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:8}}>
+            <Btn onClick={()=>{ saveWorkerUrl(workerInput); setWorkerUrl(workerInput.trim()); setEditWorker(false); }} v="fill" sm full>Save</Btn>
+            {workerUrl && <Btn onClick={()=>{ saveWorkerUrl(''); setWorkerUrl(''); setWorkerInput(''); setEditWorker(false); }} v="outline" sm>Remove</Btn>}
+          </div>
+        </div>
+      )}
+      <SH t="App"/>
+      <Row icon={dark?'sun':'moon'} label="Dark mode" sub={dark?'On — tap to switch to light':'Off — tap to switch to dark'} right={<Toggle on={dark} onToggle={onToggleDark}/>}/>
+      <Row icon="zap"  label="Replay onboarding" onClick={()=>{onReplay();onClose();}}/>
+      <Row icon="git"  label="Star on GitHub"    onClick={()=>window.open('https://github.com/promohunter/app','_blank','noopener')}/>
+      <Row icon="info" label="Submit feedback"   onClick={()=>window.open('https://github.com/promohunter/app/issues/new','_blank','noopener')}/>
+      <Row icon="shld" label="Privacy policy"    onClick={()=>window.open('https://github.com/promohunter/app/blob/main/PRIVACY.md','_blank','noopener')}/>
+      <Row icon="tag"  label="Version"           right={<span style={{fontSize:13,color:T.inkFaint,fontVariantNumeric:'tabular-nums'}}>v1.0</span>}/>
+      {cc && (
+        <Dialog title="Clear all promos?" onClose={()=>setCc(false)}>
+          <p style={{color:T.inkMid,fontSize:14,marginBottom:20,lineHeight:1.6}}>Resets your collection to the sample promos.</p>
+          <div style={{display:'flex',gap:10}}>
+            <Btn onClick={()=>setCc(false)} v="outline" full>Cancel</Btn>
+            <Btn onClick={()=>{ onUpdate(()=>mkPromos()); setCc(false); }} v="danger" full>Reset</Btn>
+          </div>
+        </Dialog>
+      )}
+      {showKey && <ApiKeySheet onClose={()=>setShowKey(false)} onSaved={()=>setHasKey(true)}/>}
+    </Sheet>
+  );
+}
+
+/* ─── Onboarding ────────────────────────────────────────────────────────────── */
+function Onboarding({onDone}) {
+  const [i,setI] = useState(0);
+  const slides = [
+    {icon:'tag',  color:T.accent,   title:'Welcome to PromoHunter', body:"Your personal deal-hunting companion. Save promo codes, track expiries, and never miss a discount."},
+    {icon:'bot',  color:T.violet,   title:'AI-powered hunting',      body:"Describe any store and Claude will suggest realistic promo codes to try at checkout."},
+    {icon:'grid', color:T.sapphire, title:'Organised at a glance',   body:"Filter by category or status. Star favourites, mark codes used, and copy in one tap."},
+    {icon:'zap',  color:T.gold,     title:'Expiry alerts',           body:"Codes expiring within 3 days are flagged automatically so you never miss out."},
+    {icon:'shld', color:T.emerald,  title:"You're all set",          body:"Explore the sample promos or tap + to add your first deal. Happy hunting!"},
+  ];
+  const s = slides[i];
+  return (
+    <div style={{position:'absolute',inset:0,background:T.bg,zIndex:300,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'32px 24px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
+      <button onClick={onDone} style={{position:'absolute',top:'max(20px,env(safe-area-inset-top))',right:20,background:T.bgWarm,border:'none',color:T.inkMid,padding:'9px 16px',borderRadius:99,fontSize:13,fontWeight:600,cursor:'pointer',WebkitTapHighlightColor:'transparent',minHeight:44}}>
+        Skip
+      </button>
+
+      <div style={{width:88,height:88,borderRadius:26,background:T.bgWarm,border:`1.5px solid ${T.rule}`,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:32,boxShadow:`0 8px 32px ${s.color}1a`}}>
+        <Icon n={s.icon} s={36} c={s.color}/>
+      </div>
+
+      <h2 style={{fontSize:26,fontWeight:800,color:T.ink,textAlign:'center',marginBottom:14,letterSpacing:'-0.04em',lineHeight:1.15,maxWidth:300}}>{s.title}</h2>
+      <p style={{fontSize:15,color:T.inkMid,textAlign:'center',lineHeight:1.75,maxWidth:300,marginBottom:40}}>{s.body}</p>
+
+      {/* Dots */}
+      <div style={{display:'flex',gap:7,marginBottom:32}}>
+        {slides.map((_,x)=>(
+          <div key={x} onClick={()=>setI(x)} style={{width:x===i?24:7,height:7,borderRadius:4,background:x===i?s.color:T.rule,transition:'all 0.25s',cursor:'pointer'}}/>
+        ))}
+      </div>
+
+      <div style={{display:'flex',gap:12,width:'100%',maxWidth:320}}>
+        {i>0 && <Btn onClick={()=>setI(x=>x-1)} v="outline" full>Back</Btn>}
+        <Btn onClick={()=>i===slides.length-1?onDone():setI(x=>x+1)} full>
+          {i===slides.length-1?'Start hunting':<>Next <Icon n="arr" s={15} c="#fff" w={2}/></>}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Root ──────────────────────────────────────────────────────────────────── */
+function App() {
+  const [promos, setPromos] = useState(loadPromos);
+  const [tab,         setTab]         = useState(0);
+  const [onboarded, setOnboarded] = useState(()=>localStorage.getItem('promohunter_onboarded')==='1');
+  const [showSettings,setShowSettings]= useState(false);
+  const [showHunt,    setShowHunt]    = useState(false);
+  const [dark,        setDark]        = useState(loadDarkMode);
+
+  // Sync T tokens before children render
+  applyTheme(dark);
+  const theme = dark ? THEMES.dark : THEMES.light;
+
+  // Persist promos to localStorage whenever they change
+  useEffect(() => { savePromos(promos); }, [promos]);
+
+  // Wrap setPromos so every update also saves synchronously to localStorage
+  const updatePromos = (updater) => {
+    setPromos(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      savePromos(next);
+      return next;
+    });
+  };
+
+  const toggleDark = () => {
+    const next = !dark;
+    setDark(next);
+    saveDarkMode(next);
+  };
+
+  return (
+    <div style={{
+      width:'100%', height:'100svh',
+      background:theme.bg,
+      display:'flex', flexDirection:'column',
+      position:'relative', overflow:'hidden',
+      fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      colorScheme: dark ? 'dark' : 'light',
+    }}>
+      <style>{`
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+        ::-webkit-scrollbar{display:none;}
+        input,select,textarea{font-size:16px!important;}
+      `}</style>
+
+      {!onboarded && <Onboarding onDone={()=>{ localStorage.setItem('promohunter_onboarded','1'); setOnboarded(true); }}/>}
+
+      {/* ── Safe-area top + header ── */}
+      <div style={{
+        background:theme.surface,
+        borderBottom:`1px solid ${theme.rule}`,
+        flexShrink:0,
+        paddingTop:'env(safe-area-inset-top)',
+      }}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px 0'}}>
+          {/* Logo */}
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:34,height:34,background:theme.accent,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Icon n="pct" s={17} c="#fff" w={2}/>
+            </div>
+            <span style={{fontSize:19,fontWeight:800,color:theme.ink,letterSpacing:'-0.04em'}}>PromoHunter</span>
+          </div>
+          {/* Actions */}
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <button onClick={()=>setShowHunt(true)} style={{display:'flex',alignItems:'center',gap:7,padding:'0 14px',height:40,background:theme.accentBg,border:`1.5px solid ${theme.accentBd}`,borderRadius:12,cursor:'pointer',color:theme.accent,fontSize:14,fontWeight:600}}>
+              <Icon n="bot" s={16} c={theme.accent}/>Hunt
+            </button>
+            <button onClick={()=>setShowSettings(true)} style={{width:40,height:40,borderRadius:12,background:theme.bgWarm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Icon n="cog" s={18} c={theme.inkMid}/>
+            </button>
+          </div>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{display:'flex',marginTop:12}}>
+          {[{label:'Overview',icon:'grid'},{label:'My Promos',icon:'list'}].map(({label,icon},idx)=>(
+            <button key={idx} onClick={()=>setTab(idx)} style={{
+              flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:7,
+              padding:'12px 0', background:'transparent', border:'none',
+              borderBottom:`2.5px solid ${tab===idx?theme.accent:'transparent'}`,
+              color:tab===idx?theme.accent:theme.inkMid, fontWeight:600, fontSize:14,
+              cursor:'pointer', transition:'color 0.15s', letterSpacing:'-0.01em',
+            }}>
+              <Icon n={icon} s={15} c={tab===idx?theme.accent:theme.inkMid}/>{label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Content ── */}
+      <div style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
+        {tab===0 && <StatsTab promos={promos}/>}
+        {tab===1 && <PromosTab promos={promos} onUpdate={updatePromos}/>}
+      </div>
+
+      {/* ── Sheets ── */}
+      {showHunt     && <HuntSheet onClose={()=>setShowHunt(false)} onAddPromos={ps=>updatePromos(prev=>[...ps,...prev])}/>}
+      {showSettings && <SettingsPanel onClose={()=>setShowSettings(false)} onUpdate={updatePromos} onReplay={()=>{ localStorage.removeItem('promohunter_onboarded'); setOnboarded(false); }} dark={dark} onToggleDark={toggleDark}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
