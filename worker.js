@@ -104,7 +104,17 @@ async function scrape(store, region) {
 function buildPrompt(store, region, category, scraped) {
   const ctx   = REGION_CONTEXT[region] || REGION_CONTEXT.AU;
   const today = new Date().toDateString();
-  const schema = `{"store":"${store}","code":"PROMOCODE or empty string if auto-applied","discount":"e.g. 20% off or Free delivery","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${category}","notes":"restrictions, source","verified":true or false,"expiresAt":"YYYY-MM-DD or empty","sourceUrl":"url or empty"}`;
+  const year  = new Date().getFullYear();
+
+  // Expiry date rules injected into every prompt
+  const expiryRule = `IMPORTANT — expiresAt field:
+- If a specific expiry date is mentioned, use it in YYYY-MM-DD format
+- If no date is mentioned but the deal is seasonal (e.g. Christmas, EOFY, Easter), estimate a realistic end date
+- If it looks like an ongoing/permanent code, set expiresAt to the end of this year (${year}-12-31)
+- If it's a limited-time or flash deal, estimate 7-14 days from today
+- NEVER leave expiresAt empty — always provide a best-estimate date`;
+
+  const schema = `{"store":"${store}","code":"PROMOCODE or empty string if auto-applied","discount":"e.g. 20% off or Free delivery or $10 off","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${category}","notes":"restrictions and source info","verified":true or false,"expiresAt":"YYYY-MM-DD — required, always estimate if unknown","sourceUrl":"url or empty string"}`;
 
   if (scraped.length > 200) {
     return `You are PromoHunter AI. Extract every promo code and deal for "${store}" from the scraped content below.
@@ -118,6 +128,8 @@ ${scraped}
 
 Extract ALL codes, discounts and deals from the text. Also add codes from your training knowledge not already in the content.
 For parking companies (Wilson Parking, Secure Parking etc) also include: MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY.
+
+${expiryRule}
 
 Return ONLY a valid JSON array. No markdown, no backticks, no explanation.
 Each item: ${schema}
@@ -133,6 +145,8 @@ Consider: loyalty programs, app codes, partner discounts, seasonal promos, welco
 For parking companies: include MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY and any others you know.
 Include uncertain codes with verified:false and note "Worth trying".
 Do NOT invent codes you have no knowledge of.
+
+${expiryRule}
 
 Return ONLY a valid JSON array. No markdown, no backticks, no explanation.
 Each item: ${schema}
