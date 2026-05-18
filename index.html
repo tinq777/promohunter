@@ -1212,7 +1212,236 @@ function Onboarding({onDone}) {
   );
 }
 
-/* ─── Root ──────────────────────────────────────────────────────────────────── */
+/* ─── Watchlist storage ──────────────────────────────────────────────────────── */
+const WATCH_STORAGE = 'promohunter_watchlist';
+const loadWatch = () => { try { const d=localStorage.getItem(WATCH_STORAGE); return d?JSON.parse(d):[]; } catch { return []; } };
+const saveWatch = w => { try { localStorage.setItem(WATCH_STORAGE, JSON.stringify(w)); } catch {} };
+
+/* ─── Watchlist Tab ──────────────────────────────────────────────────────────── */
+function WatchlistTab({onAddPromos}) {
+  const [watches, setWatches]   = useState(loadWatch);
+  const [newStore, setNewStore] = useState('');
+  const [newCat, setNewCat]     = useState('retail');
+  const [newRegion, setNewRegion] = useState('AU');
+  const [scanning, setScanning] = useState({}); // id -> true while scanning
+  const [results, setResults]   = useState({}); // id -> { deals, source, scannedAt }
+  const [toast, setToast]       = useState('');
+
+  const updateWatches = w => { setWatches(w); saveWatch(w); };
+
+  const addWatch = () => {
+    if(!newStore.trim()) return;
+    const w = { id:uid(), store:newStore.trim(), category:newCat, region:newRegion, addedAt:new Date().toISOString() };
+    updateWatches([w, ...watches]);
+    setNewStore('');
+  };
+
+  const removeWatch = id => updateWatches(watches.filter(w=>w.id!==id));
+
+  const scan = async (watch) => {
+    const apiKey = loadApiKey();
+    const workerUrl = loadWorkerUrl();
+    if(!apiKey) { setToast('Add your API key in ⚙️ Settings first'); setTimeout(()=>setToast(''),3000); return; }
+    setScanning(s=>({...s,[watch.id]:true}));
+
+    try {
+      let deals = [], source = 'knowledge';
+
+      if(workerUrl) {
+        const cleanUrl = workerUrl.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'');
+        const r = await fetch(`${cleanUrl}/hunt`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({store:watch.store, region:watch.region, category:watch.category, apiKey}),
+        });
+        const d = await r.json();
+        if(!d.error) { deals = d.deals||[]; source = d.source||'scraped'; }
+      } else {
+        const prompt = `You are PromoHunter AI. Find all known promo codes for "${watch.store}" in ${watch.region} (${watch.category}).
+Return ONLY a valid JSON array. Each item: {"store":"${watch.store}","code":"CODE","discount":"value","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${watch.category}","notes":"","verified":false,"expiresAt":"","sourceUrl":""}
+Up to 8 results. Return [] if none known.`;
+        const r = await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+          body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1500,messages:[{role:'user',content:prompt}]})
+        });
+        const d = await r.json();
+        const raw = (d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+        const match = raw.replace(/```json|```/g,'').match(/\[[\s\S]*\]/);
+        if(match) deals = JSON.parse(match[0]);
+      }
+
+      setResults(prev=>({...prev,[watch.id]:{deals, source, scannedAt:new Date().toISOString()}}));
+    } catch(e) {
+      setToast(`Scan failed: ${e.message}`);
+      setTimeout(()=>setToast(''),3000);
+    }
+    setScanning(s=>({...s,[watch.id]:false}));
+  };
+
+  const scanAll = () => watches.forEach(w => scan(w));
+
+  const saveDeals = (watchId, deals) => {
+    const toSave = deals.map(p=>({...p,id:uid(),savedAt:new Date().toISOString(),used:false,favourite:false,url:''}));
+    onAddPromos(toSave);
+    setToast(`Saved ${toSave.length} code${toSave.length!==1?'s':''}`);
+    setTimeout(()=>setToast(''),2000);
+  };
+
+  const cats = [{id:'all',label:'All'},...CATS];
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',position:'relative'}}>
+
+      {toast && (
+        <div style={{position:'absolute',top:12,left:'50%',transform:'translateX(-50%)',background:T.emerald,color:'#fff',padding:'9px 18px',borderRadius:99,fontSize:13,fontWeight:600,zIndex:40,whiteSpace:'nowrap',pointerEvents:'none',display:'flex',alignItems:'center',gap:6,boxShadow:'0 4px 16px rgba(0,0,0,0.2)'}}>
+          <Icon n="chk" s={14} c="#fff" w={2.5}/>{toast}
+        </div>
+      )}
+
+      {/* ── Add store form ── */}
+      <div style={{padding:'10px 16px 0',flexShrink:0}}>
+        <div style={{background:T.surface,borderRadius:14,padding:14,border:`1.5px solid ${T.rule}`,marginBottom:10}}>
+          <p style={{fontSize:13,fontWeight:600,color:T.ink,marginBottom:10,letterSpacing:'-0.01em'}}>Watch a store</p>
+          <input
+            value={newStore} onChange={e=>setNewStore(e.target.value)}
+            placeholder="e.g. Nike, JB Hi-Fi, Woolworths…"
+            onKeyDown={e=>e.key==='Enter'&&addWatch()}
+            style={{width:'100%',padding:'11px 13px',background:T.bgWarm,border:`1.5px solid ${T.rule}`,borderRadius:10,color:T.ink,fontSize:16,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:10}}
+          />
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+            <div style={{position:'relative'}}>
+              <select value={newRegion} onChange={e=>setNewRegion(e.target.value)} style={{width:'100%',padding:'10px 32px 10px 12px',background:T.bgWarm,border:`1.5px solid ${T.rule}`,borderRadius:10,color:T.ink,fontSize:14,outline:'none',appearance:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+                {REGIONS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+              <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}}><Icon n="chvD" s={13} c={T.inkFaint}/></span>
+            </div>
+            <div style={{position:'relative'}}>
+              <select value={newCat} onChange={e=>setNewCat(e.target.value)} style={{width:'100%',padding:'10px 32px 10px 12px',background:T.bgWarm,border:`1.5px solid ${T.rule}`,borderRadius:10,color:T.ink,fontSize:14,outline:'none',appearance:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+                {CATS.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+              <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}}><Icon n="chvD" s={13} c={T.inkFaint}/></span>
+            </div>
+          </div>
+          <Btn onClick={addWatch} full disabled={!newStore.trim()}>
+            <Icon n="plus" s={15} c="#fff" w={2.5}/>Add to Watchlist
+          </Btn>
+        </div>
+
+        {watches.length > 0 && (
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{fontSize:13,color:T.inkMid,fontWeight:600}}>{watches.length} store{watches.length!==1?'s':''} watched</span>
+            <button onClick={scanAll} style={{display:'flex',alignItems:'center',gap:6,padding:'7px 13px',background:T.accentBg,border:`1.5px solid ${T.accentBd}`,borderRadius:10,cursor:'pointer',color:T.accent,fontSize:13,fontWeight:600}}>
+              <Icon n="zap" s={14} c={T.accent} w={2}/>Scan All
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Watch list ── */}
+      <div style={{flex:1,overflowY:'auto',padding:'0 16px 80px',WebkitOverflowScrolling:'touch'}}>
+        {watches.length === 0 ? (
+          <div style={{textAlign:'center',padding:'48px 20px'}}>
+            <div style={{width:56,height:56,borderRadius:16,background:T.bgWarm,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+              <Icon n="clock" s={24} c={T.inkFaint}/>
+            </div>
+            <div style={{fontWeight:700,color:T.inkMid,fontSize:15,letterSpacing:'-0.02em',marginBottom:6}}>No stores watched yet</div>
+            <div style={{fontSize:13,color:T.inkFaint}}>Add a store above to start scanning for deals</div>
+          </div>
+        ) : watches.map(w => {
+          const r = results[w.id];
+          const isScanning = scanning[w.id];
+          const cat = CAT[w.category]||CAT.other;
+          const region = REGIONS.find(x=>x.value===w.region);
+          return (
+            <div key={w.id} style={{background:T.surface,borderRadius:14,border:`1.5px solid ${T.rule}`,marginBottom:12,overflow:'hidden'}}>
+              {/* Watch header */}
+              <div style={{padding:'14px 14px 12px',display:'flex',alignItems:'center',gap:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:15,color:T.ink,letterSpacing:'-0.02em',marginBottom:5}}>{w.store}</div>
+                  <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                    <Chip color={cat.color} bg={cat.bg}>{cat.label}</Chip>
+                    <Chip color={T.inkMid} bg={T.bgWarm}>{region?.label||w.region}</Chip>
+                    {r && <Chip color={r.source==='scraped'?T.emerald:T.gold} bg={r.source==='scraped'?T.emeraldBg:T.goldBg} dot>{r.source==='scraped'?'Live':'Knowledge'}</Chip>}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6,flexShrink:0}}>
+                  <button onClick={()=>scan(w)} style={{width:38,height:38,borderRadius:10,background:T.accentBg,border:`1.5px solid ${T.accentBd}`,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {isScanning
+                      ? <div style={{width:14,height:14,border:`2px solid ${T.accentBd}`,borderTopColor:T.accent,borderRadius:'50%',animation:'spin 0.7s linear infinite'}}/>
+                      : <Icon n="srch" s={15} c={T.accent}/>
+                    }
+                  </button>
+                  <button onClick={()=>removeWatch(w.id)} style={{width:38,height:38,borderRadius:10,background:T.bgWarm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    <Icon n="x" s={15} c={T.inkMid}/>
+                  </button>
+                </div>
+              </div>
+
+              {/* Last scanned */}
+              {r?.scannedAt && (
+                <div style={{padding:'0 14px 10px'}}>
+                  <span style={{fontSize:11,color:T.inkFaint,display:'flex',alignItems:'center',gap:4}}>
+                    <Icon n="clock" s={11} c={T.inkFaint}/>Last scanned {new Date(r.scannedAt).toLocaleString()}
+                  </span>
+                </div>
+              )}
+
+              {/* Scanning spinner */}
+              {isScanning && (
+                <div style={{padding:'16px',borderTop:`1px solid ${T.rule}`,textAlign:'center'}}>
+                  <p style={{fontSize:13,color:T.inkMid}}>Scanning for deals…</p>
+                </div>
+              )}
+
+              {/* Results */}
+              {!isScanning && r?.deals?.length > 0 && (
+                <div style={{borderTop:`1px solid ${T.rule}`}}>
+                  <div style={{padding:'10px 14px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <span style={{fontSize:13,fontWeight:600,color:T.ink}}>{r.deals.length} deal{r.deals.length!==1?'s':''} found</span>
+                    <Btn onClick={()=>saveDeals(w.id,r.deals)} sm v="fill">
+                      <Icon n="plus" s={13} c="#fff" w={2.5}/>Save all
+                    </Btn>
+                  </div>
+                  {r.deals.map((p,i)=>{
+                    const c = CAT[p.category]||CAT.other;
+                    return (
+                      <div key={i} style={{padding:'10px 14px',borderTop:`1px solid ${T.rule}`,display:'flex',alignItems:'center',gap:10}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontFamily:'monospace',fontWeight:700,fontSize:14,color:T.accent,marginBottom:3}}>{p.code||'Auto-applied'}</div>
+                          <div style={{fontSize:12,color:T.inkMid}}>{p.type==='Percentage'?`${p.discount}% off`:p.discount}</div>
+                          {p.notes&&<div style={{fontSize:11,color:T.inkFaint,marginTop:2,lineHeight:1.4}}>{p.notes}</div>}
+                        </div>
+                        <div style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end',flexShrink:0}}>
+                          {p.expiresAt&&<span style={{fontSize:10,color:T.inkFaint,fontFamily:'monospace'}}>{p.expiresAt}</span>}
+                          {p.verified&&<Chip color={T.emerald} bg={T.emeraldBg} small dot>verified</Chip>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* No results */}
+              {!isScanning && r && r.deals?.length === 0 && (
+                <div style={{padding:'14px',borderTop:`1px solid ${T.rule}`,textAlign:'center'}}>
+                  <p style={{fontSize:13,color:T.inkFaint}}>No deals found — try scanning again later</p>
+                </div>
+              )}
+
+              {/* Not yet scanned */}
+              {!isScanning && !r && (
+                <div style={{padding:'14px',borderTop:`1px solid ${T.rule}`,textAlign:'center'}}>
+                  <p style={{fontSize:12,color:T.inkFaint}}>Tap <Icon n="srch" s={12} c={T.inkFaint}/> to scan for deals</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 function App() {
   const [promos, setPromos] = useState(loadPromos);
   const [tab,         setTab]         = useState(0);
@@ -1289,15 +1518,15 @@ function App() {
 
         {/* Tab bar */}
         <div style={{display:'flex',marginTop:12}}>
-          {[{label:'Overview',icon:'grid'},{label:'My Promos',icon:'list'}].map(({label,icon},idx)=>(
+          {[{label:'Overview',icon:'grid'},{label:'My Promos',icon:'list'},{label:'Watchlist',icon:'clock'}].map(({label,icon},idx)=>(
             <button key={idx} onClick={()=>setTab(idx)} style={{
-              flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:7,
+              flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:5,
               padding:'12px 0', background:'transparent', border:'none',
               borderBottom:`2.5px solid ${tab===idx?theme.accent:'transparent'}`,
-              color:tab===idx?theme.accent:theme.inkMid, fontWeight:600, fontSize:14,
+              color:tab===idx?theme.accent:theme.inkMid, fontWeight:600, fontSize:12,
               cursor:'pointer', transition:'color 0.15s', letterSpacing:'-0.01em',
             }}>
-              <Icon n={icon} s={15} c={tab===idx?theme.accent:theme.inkMid}/>{label}
+              <Icon n={icon} s={13} c={tab===idx?theme.accent:theme.inkMid}/>{label}
             </button>
           ))}
         </div>
@@ -1307,6 +1536,7 @@ function App() {
       <div style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
         {tab===0 && <StatsTab promos={promos}/>}
         {tab===1 && <PromosTab promos={promos} onUpdate={updatePromos}/>}
+        {tab===2 && <WatchlistTab onAddPromos={ps=>updatePromos(prev=>[...ps,...prev])}/>}
       </div>
 
       {/* ── Sheets ── */}
