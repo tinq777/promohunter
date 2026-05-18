@@ -1,0 +1,209 @@
+/**
+ * PromoHunter Cloudflare Worker
+ * Scrapes coupon sites + calls Anthropic API server-side (no CORS issues)
+ *
+ * POST /hunt  { store, region, category, apiKey }
+ * GET  /      health check
+ */
+
+// ─── Helpers (defined first) ──────────────────────────────────────────────────
+const slug = str =>
+  str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+const stripHtml = html =>
+  html.replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+const CORS = {
+  'Access-Control-Allow-Origin':  '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { ...CORS, 'Content-Type': 'application/json' },
+  });
+
+// ─── Coupon sources per region ────────────────────────────────────────────────
+const SOURCES = {
+  AU: store => [
+    `https://www.ozbargain.com.au/search/node/${encodeURIComponent(store)}?sort=date`,
+    `https://www.retailmenot.com/view/${slug(store)}.com.au`,
+    `https://www.groupon.com.au/coupons/${slug(store)}`,
+    `https://www.picodi.com/au/s/${slug(store)}`,
+  ],
+  US: store => [
+    `https://www.retailmenot.com/view/${slug(store)}.com`,
+    `https://www.groupon.com/coupons/${slug(store)}`,
+    `https://www.coupons.com/coupon-codes/${slug(store)}`,
+  ],
+  UK: store => [
+    `https://www.retailmenot.com/view/${slug(store)}.co.uk`,
+    `https://www.vouchercodes.co.uk/${slug(store)}.com`,
+    `https://www.groupon.co.uk/coupons/${slug(store)}`,
+  ],
+  NZ: store => [
+    `https://www.retailmenot.com/view/${slug(store)}.co.nz`,
+    `https://www.picodi.com/nz/s/${slug(store)}`,
+  ],
+  CA: store => [
+    `https://www.retailmenot.com/view/${slug(store)}.ca`,
+    `https://www.groupon.ca/coupons/${slug(store)}`,
+  ],
+  SG: store => [
+    `https://www.picodi.com/sg/s/${slug(store)}`,
+    `https://www.retailmenot.com/view/${slug(store)}.com.sg`,
+  ],
+};
+
+const REGION_CONTEXT = {
+  AU: "Australia (AUD). Key AU retailers: JB Hi-Fi, The Iconic, Chemist Warehouse, Kogan, Catch, Myer, David Jones, Cotton On, Woolworths, Coles, Menulog, DoorDash AU, Bunnings, Harvey Norman, Officeworks, Dan Murphy's, BCF, rebel sport, Wilson Parking, Secure Parking.",
+  US: 'United States (USD). Key retailers: Amazon, Target, Walmart, Best Buy, Nike, Gap, DoorDash, Uber Eats.',
+  UK: 'United Kingdom (GBP). Key retailers: ASOS, Boots, Argos, John Lewis, Deliveroo, Just Eat, Currys.',
+  NZ: "New Zealand (NZD). Key retailers: The Warehouse, Farmers, Noel Leeming, PB Tech, Countdown.",
+  CA: "Canada (CAD). Key retailers: Canadian Tire, Sport Chek, Hudson's Bay, Indigo, Skip The Dishes.",
+  SG: 'Singapore (SGD). Key retailers: Lazada, Shopee, FairPrice, Redmart, Grab Food.',
+};
+
+// ─── Fetch one page ───────────────────────────────────────────────────────────
+async function fetchPage(url) {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-AU,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!res.ok) return '';
+    const text = await res.text();
+    return stripHtml(text).slice(0, 5000);
+  } catch {
+    return '';
+  }
+}
+
+// ─── Scrape all sources in parallel ──────────────────────────────────────────
+async function scrape(store, region) {
+  const urls = (SOURCES[region] || SOURCES.AU)(store);
+  const settled = await Promise.allSettled(urls.map(fetchPage));
+  return settled
+    .map(r => r.status === 'fulfilled' ? r.value : '')
+    .filter(s => s.length > 50)
+    .join('\n\n---\n\n')
+    .slice(0, 18000);
+}
+
+// ─── Build Claude prompt ──────────────────────────────────────────────────────
+function buildPrompt(store, region, category, scraped) {
+  const ctx   = REGION_CONTEXT[region] || REGION_CONTEXT.AU;
+  const today = new Date().toDateString();
+  const schema = `{"store":"${store}","code":"PROMOCODE or empty string if auto-applied","discount":"e.g. 20% off or Free delivery","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${category}","notes":"restrictions, source","verified":true or false,"expiresAt":"YYYY-MM-DD or empty","sourceUrl":"url or empty"}`;
+
+  if (scraped.length > 200) {
+    return `You are PromoHunter AI. Extract every promo code and deal for "${store}" from the scraped content below.
+
+Region: ${ctx}
+Today: ${today}
+
+=== SCRAPED CONTENT ===
+${scraped}
+=== END ===
+
+Extract ALL codes, discounts and deals from the text. Also add codes from your training knowledge not already in the content.
+For parking companies (Wilson Parking, Secure Parking etc) also include: MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY.
+
+Return ONLY a valid JSON array. No markdown, no backticks, no explanation.
+Each item: ${schema}
+Up to 10 results. If nothing found return [].`;
+  }
+
+  return `You are PromoHunter AI, an expert in ${ctx}
+
+Find ALL known promo codes and deals for "${store}" in ${region} (${category}).
+Today: ${today}
+
+Consider: loyalty programs, app codes, partner discounts, seasonal promos, welcome codes.
+For parking companies: include MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY and any others you know.
+Include uncertain codes with verified:false and note "Worth trying".
+Do NOT invent codes you have no knowledge of.
+
+Return ONLY a valid JSON array. No markdown, no backticks, no explanation.
+Each item: ${schema}
+Up to 10 results. If no knowledge of real codes return [].`;
+}
+
+// ─── Call Anthropic API ───────────────────────────────────────────────────────
+async function callClaude(prompt, apiKey) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const isAuth = res.status === 401 || err?.error?.type === 'authentication_error';
+    throw Object.assign(new Error(err?.error?.message || `HTTP ${res.status}`), { isAuth });
+  }
+
+  const data = await res.json();
+  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  const match = text.replace(/```json|```/g, '').match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try { return JSON.parse(match[0]); } catch { return []; }
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
+export default {
+  async fetch(request) {
+    const method = request.method.toUpperCase();
+
+    if (method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS });
+    }
+
+    const url = new URL(request.url);
+
+    if (url.pathname === '/' || url.pathname === '') {
+      return json({ status: 'ok', service: 'PromoHunter Worker' });
+    }
+
+    if (url.pathname === '/hunt' && method === 'POST') {
+      let body;
+      try { body = await request.json(); }
+      catch { return json({ error: 'Invalid JSON body' }, 400); }
+
+      const { store, region = 'AU', category = 'retail', apiKey } = body || {};
+
+      if (!store?.trim()) return json({ error: 'store is required' }, 400);
+      if (!apiKey?.trim()) return json({ error: 'apiKey is required', auth: true }, 400);
+
+      try {
+        const scraped = await scrape(store.trim(), region);
+        const source  = scraped.length > 200 ? 'scraped' : 'knowledge';
+        const prompt  = buildPrompt(store.trim(), region, category, scraped);
+        const deals   = await callClaude(prompt, apiKey.trim());
+        return json({ deals, source, scraped: scraped.length });
+      } catch (err) {
+        return json({ error: err.message || 'Worker error', auth: !!err.isAuth }, err.isAuth ? 401 : 500);
+      }
+    }
+
+    return json({ error: 'Not found' }, 404);
+  },
+};
