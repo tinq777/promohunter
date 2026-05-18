@@ -445,7 +445,7 @@ const WORKER_URL_STORAGE = 'promohunter_worker_url';
 const loadApiKey    = () => { try { return localStorage.getItem(API_KEY_STORAGE)||''; } catch { return ''; } };
 const saveApiKey    = k  => { try { localStorage.setItem(API_KEY_STORAGE, k); } catch {} };
 const loadWorkerUrl = () => { try { return localStorage.getItem(WORKER_URL_STORAGE)||''; } catch { return ''; } };
-const saveWorkerUrl = u  => { try { localStorage.setItem(WORKER_URL_STORAGE, u.trim().replace(/\/+$/,'')); } catch {} };
+const saveWorkerUrl = u  => { try { localStorage.setItem(WORKER_URL_STORAGE, u.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'')); } catch {} };
 
 /* ─── API Key Setup Sheet ───────────────────────────────────────────────────── */
 function ApiKeySheet({onClose, onSaved}) {
@@ -572,15 +572,21 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
     try {
       // ── Route A: Cloudflare Worker (required for iOS Safari) ─────────────
       if(workerUrl) {
+        // Sanitise — strip whitespace, trailing slashes, invisible chars
+        const cleanUrl = workerUrl.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'');
+        if(!cleanUrl.startsWith('http')) {
+          setErr('Worker URL looks invalid — go to ⚙️ Settings → Cloudflare Worker URL and re-paste it.');
+          setLoading(false); return;
+        }
         let r;
         try {
-          r = await fetch(`${workerUrl}/hunt`, {
+          r = await fetch(`${cleanUrl}/hunt`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ store, region, category: cat, apiKey }),
           });
         } catch(e) {
-          setErr(`Cannot reach worker at ${workerUrl} — check the URL in Settings and your internet connection.`);
+          setErr(`Cannot reach worker — check the URL in ⚙️ Settings and your internet. (${e.message})`);
           setLoading(false); return;
         }
         const d = await r.json();
@@ -1099,7 +1105,17 @@ function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark}) {
           </div>
           <div style={{display:'flex',gap:8,marginTop:8}}>
             <Btn onClick={()=>{ saveWorkerUrl(workerInput); setWorkerUrl(workerInput.trim()); setEditWorker(false); }} v="fill" sm full>Save</Btn>
-            {workerUrl && <Btn onClick={()=>{ saveWorkerUrl(''); setWorkerUrl(''); setWorkerInput(''); setEditWorker(false); }} v="outline" sm>Remove</Btn>}
+            {workerInput && <Btn onClick={async()=>{
+              const clean = workerInput.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'');
+              try {
+                const r = await fetch(clean);
+                const d = await r.json();
+                alert(d.status==='ok' ? '✅ Worker is connected and working!' : '⚠️ Worker responded but unexpectedly: '+JSON.stringify(d));
+              } catch(e) {
+                alert('❌ Cannot reach worker: '+e.message+'\n\nCheck the URL is correct and the worker is deployed.');
+              }
+            }} v="outline" sm>Test</Btn>}
+            {workerUrl && <Btn onClick={()=>{ saveWorkerUrl(''); setWorkerUrl(''); setWorkerInput(''); setEditWorker(false); }} v="ghost" sm>Remove</Btn>}
           </div>
         </div>
       )}
