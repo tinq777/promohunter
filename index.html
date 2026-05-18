@@ -371,13 +371,18 @@ function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onCopy})
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:6}}>
         <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           {isExp ? (
-            <span style={{fontSize:12,color:T.rose,display:'flex',alignItems:'center',gap:4}}>
-              <Icon n="clock" s={12} c={T.rose}/>Expired {promo.expiresAt}
+            <span style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 9px',borderRadius:99,background:T.roseBg,border:`1px solid ${T.rose}40`}}>
+              <Icon n="clock" s={12} c={T.rose}/>
+              <span style={{fontSize:12,color:T.rose}}><strong>EXPIRED</strong> {promo.expiresAt}</span>
             </span>
           ) : exp ? (
             <span style={{fontSize:12,color:isSoon?T.gold:T.inkFaint,display:'flex',alignItems:'center',gap:4}}>
               <Icon n="clock" s={12} c={isSoon?T.gold:T.inkFaint}/>
-              {isSoon && dl===0 ? 'Expires today' : isSoon ? `Expires in ${dl}d` : `Expires ${promo.expiresAt}`}
+              {isSoon && dl===0
+                ? <><strong style={{color:T.gold}}>Expires today</strong></>
+                : isSoon
+                ? <><strong style={{color:T.gold}}>Expires in {dl}d</strong> — {promo.expiresAt}</>
+                : `Expires ${promo.expiresAt}`}
             </span>
           ) : (
             <span style={{fontSize:12,color:T.inkFaint,display:'flex',alignItems:'center',gap:4}}>
