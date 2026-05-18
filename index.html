@@ -370,9 +370,18 @@ function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onCopy})
       {/* Footer */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:6}}>
         <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-          {exp&&!isExp && (
+          {isExp ? (
+            <span style={{fontSize:12,color:T.rose,display:'flex',alignItems:'center',gap:4}}>
+              <Icon n="clock" s={12} c={T.rose}/>Expired {promo.expiresAt}
+            </span>
+          ) : exp ? (
             <span style={{fontSize:12,color:isSoon?T.gold:T.inkFaint,display:'flex',alignItems:'center',gap:4}}>
-              <Icon n="clock" s={12} c={isSoon?T.gold:T.inkFaint}/>{promo.expiresAt}
+              <Icon n="clock" s={12} c={isSoon?T.gold:T.inkFaint}/>
+              {isSoon && dl===0 ? 'Expires today' : isSoon ? `Expires in ${dl}d` : `Expires ${promo.expiresAt}`}
+            </span>
+          ) : (
+            <span style={{fontSize:12,color:T.inkFaint,display:'flex',alignItems:'center',gap:4}}>
+              <Icon n="clock" s={12} c={T.inkFaint}/>No expiry listed
             </span>
           )}
           {promo.url && (
@@ -539,6 +548,7 @@ function HuntSheet({onClose, onAddPromos}) {
   const [region,setRegion]     = useState('AU');
   const [loading,setLoading]   = useState(false);
   const [results,setResults]   = useState(null);
+  const [source,setSource]     = useState('knowledge'); // 'scraped' or 'knowledge'
   const [err,setErr]           = useState('');
   const [saved,setSaved]       = useState(new Set());
   const [apiKey,setApiKey]     = useState(loadApiKey);
@@ -594,6 +604,7 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
           setErr(d.auth ? 'Invalid API key. Tap "Change API key" to update it.' : `Worker error: ${d.error}`);
           setLoading(false); return;
         }
+        setSource(d.source || 'scraped');
         setResults(Array.isArray(d.deals) ? d.deals : []);
         setLoading(false); return;
       }
@@ -632,6 +643,7 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
       const match = clean.match(/\[[\s\S]*\]/);
       if(!match) { setResults([]); setLoading(false); return; }
       const parsed = JSON.parse(match[0]);
+      setSource('knowledge');
       setResults(Array.isArray(parsed) ? parsed : []);
 
     } catch(e) {
@@ -711,7 +723,15 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
       {results && results.length > 0 && (
         <div style={{marginTop:20}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-            <span style={{fontWeight:700,color:T.ink,fontSize:15,letterSpacing:'-0.02em'}}>Found {results.length} deals</span>
+            <div>
+              <span style={{fontWeight:700,color:T.ink,fontSize:15,letterSpacing:'-0.02em'}}>Found {results.length} deals</span>
+              <div style={{display:'flex',alignItems:'center',gap:5,marginTop:4}}>
+                {source==='scraped'
+                  ? <><div style={{width:7,height:7,borderRadius:'50%',background:T.emerald}}/><span style={{fontSize:11,color:T.emerald,fontWeight:600}}>Live — scraped from coupon sites</span></>
+                  : <><div style={{width:7,height:7,borderRadius:'50%',background:T.gold}}/><span style={{fontSize:11,color:T.gold,fontWeight:600}}>From AI training knowledge</span></>
+                }
+              </div>
+            </div>
             <Btn onClick={saveAll} sm v="outline">Save all</Btn>
           </div>
           {results.map((p,i)=>{
@@ -748,9 +768,13 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
       {results && results.length===0 && (
         <p style={{color:T.inkMid,fontSize:14,marginTop:20,textAlign:'center'}}>No results found. Try a different search.</p>
       )}
-      <div style={{marginTop:16,padding:14,background:T.goldBg,borderRadius:12,border:`1px solid ${T.gold}30`,display:'flex',gap:10,alignItems:'flex-start'}}>
-        <div style={{flexShrink:0,marginTop:1}}><Icon n="info" s={15} c={T.gold}/></div>
-        <p style={{fontSize:12,color:T.gold,lineHeight:1.7,margin:0}}>Claude searches the web for real deals in {REGIONS.find(r=>r.value===region)?.label||region}. Results marked <strong>Live find</strong> were found on actual sites — still verify at checkout as codes can expire quickly.</p>
+      <div style={{marginTop:16,padding:14,background:source==='scraped'?T.emeraldBg:T.goldBg,borderRadius:12,border:`1px solid ${source==='scraped'?T.emerald:T.gold}30`,display:'flex',gap:10,alignItems:'flex-start'}}>
+        <div style={{flexShrink:0,marginTop:1}}><Icon n="info" s={15} c={source==='scraped'?T.emerald:T.gold}/></div>
+        <p style={{fontSize:12,color:source==='scraped'?T.emerald:T.gold,lineHeight:1.7,margin:0}}>
+          {source==='scraped'
+            ? 'Results scraped live from coupon sites for '+region+'. Codes are real finds — still verify at checkout as they can expire quickly.'
+            : 'No live scraping results found — these are from AI training knowledge. Set up your Cloudflare Worker for live results.'}
+        </p>
       </div>
     </Sheet>
   );
@@ -902,7 +926,12 @@ function PromosTab({promos, onUpdate}) {
 
   const saveP   = p   => onUpdate(ps=>ps.some(x=>x.id===p.id)?ps.map(x=>x.id===p.id?{...p}:x):[...ps,p]);
   const delP    = id  => { onUpdate(ps=>ps.filter(p=>p.id!==id)); setDelId(null); };
-  const togUsed = id  => onUpdate(ps=>ps.map(p=>p.id===id?{...p,used:!p.used}:p));
+  const togUsed = id => {
+    const promo = promos.find(p=>p.id===id);
+    const nowUsed = !promo?.used;
+    onUpdate(ps=>ps.map(p=>p.id===id?{...p,used:!p.used}:p));
+    if(nowUsed) { setToast('✓ Marked as used'); setTimeout(()=>setToast(''),2000); }
+  };
   const togFav  = id  => onUpdate(ps=>ps.map(p=>p.id===id?{...p,favourite:!p.favourite}:p));
   const copied  = code => { setToast(code); setTimeout(()=>setToast(''),2200); };
 
@@ -980,8 +1009,8 @@ function PromosTab({promos, onUpdate}) {
 
       {/* ── Toast ── */}
       {toast && (
-        <div style={{position:'absolute',top:12,left:'50%',transform:'translateX(-50%)',background:T.emerald,color:'#fff',padding:'9px 18px',borderRadius:99,fontSize:13,fontWeight:600,zIndex:40,whiteSpace:'nowrap',pointerEvents:'none',display:'flex',alignItems:'center',gap:6,boxShadow:'0 4px 16px rgba(42,125,79,0.3)'}}>
-          <Icon n="chk" s={14} c="#fff" w={2.5}/>Copied: {toast}
+        <div style={{position:'absolute',top:12,left:'50%',transform:'translateX(-50%)',background:toast.startsWith('✓ Marked')?T.violet:T.emerald,color:'#fff',padding:'9px 18px',borderRadius:99,fontSize:13,fontWeight:600,zIndex:40,whiteSpace:'nowrap',pointerEvents:'none',display:'flex',alignItems:'center',gap:6,boxShadow:'0 4px 16px rgba(0,0,0,0.2)'}}>
+          <Icon n="chk" s={14} c="#fff" w={2.5}/>{toast.startsWith('✓ Marked') ? toast : `Copied: ${toast}`}
         </div>
       )}
 
