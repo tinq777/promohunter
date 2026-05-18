@@ -768,14 +768,16 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
       {results && results.length===0 && (
         <p style={{color:T.inkMid,fontSize:14,marginTop:20,textAlign:'center'}}>No results found. Try a different search.</p>
       )}
-      <div style={{marginTop:16,padding:14,background:source==='scraped'?T.emeraldBg:T.goldBg,borderRadius:12,border:`1px solid ${source==='scraped'?T.emerald:T.gold}30`,display:'flex',gap:10,alignItems:'flex-start'}}>
-        <div style={{flexShrink:0,marginTop:1}}><Icon n="info" s={15} c={source==='scraped'?T.emerald:T.gold}/></div>
-        <p style={{fontSize:12,color:source==='scraped'?T.emerald:T.gold,lineHeight:1.7,margin:0}}>
-          {source==='scraped'
-            ? 'Results scraped live from coupon sites for '+region+'. Codes are real finds — still verify at checkout as they can expire quickly.'
-            : 'No live scraping results found — these are from AI training knowledge. Set up your Cloudflare Worker for live results.'}
-        </p>
-      </div>
+      {results !== null && !loading && (
+        <div style={{marginTop:16,padding:14,background:source==='scraped'?T.emeraldBg:T.goldBg,borderRadius:12,border:`1px solid ${source==='scraped'?T.emerald:T.gold}30`,display:'flex',gap:10,alignItems:'flex-start'}}>
+          <div style={{flexShrink:0,marginTop:1}}><Icon n="info" s={15} c={source==='scraped'?T.emerald:T.gold}/></div>
+          <p style={{fontSize:12,color:source==='scraped'?T.emerald:T.gold,lineHeight:1.7,margin:0}}>
+            {source==='scraped'
+              ? `Results scraped live from coupon sites for ${region}. Codes are real finds — still verify at checkout as they can expire quickly.`
+              : 'No live scraping results — these are from AI training knowledge.'}
+          </p>
+        </div>
+      )}
     </Sheet>
   );
 }
