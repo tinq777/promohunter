@@ -995,6 +995,7 @@ function PromosTab({promos, onUpdate}) {
     onUpdate(ps=>ps.map(p=>p.id===id?{...p,used:!p.used}:p));
     if(nowUsed) { setToast('✓ Marked as used'); setTimeout(()=>setToast(''),2000); }
   };
+  const togFav      = id => onUpdate(ps=>ps.map(p=>p.id===id?{...p,favourite:!p.favourite}:p));
   const togVerified = id => onUpdate(ps=>ps.map(p=>p.id===id?{...p,verified:!p.verified}:p));
   const copied  = code => { setToast(code); setTimeout(()=>setToast(''),2200); };
 
