@@ -535,6 +535,7 @@ function ApiKeySheet({onClose, onSaved}) {
 }
 
 const REGIONS = [
+  {value:'ALL', label:'🌍 All Regions'},
   {value:'AU', label:'🇦🇺 Australia'},
   {value:'US', label:'🇺🇸 United States'},
   {value:'UK', label:'🇬🇧 United Kingdom'},
@@ -572,112 +573,90 @@ function HuntSheet({onClose, onAddPromos}) {
     const store     = q.trim();
     const today     = new Date().toDateString();
     const workerUrl = loadWorkerUrl();
+    const cleanUrl  = workerUrl ? workerUrl.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'') : '';
 
-    const prompt = `You are PromoHunter AI, an expert in ${region} retail discounts and promo codes.
+    const sortDeals = deals => [...deals].sort((a,b)=>{
+      const now=new Date(), aExp=a.expiresAt?new Date(a.expiresAt):null, bExp=b.expiresAt?new Date(b.expiresAt):null;
+      const aGone=aExp&&aExp<now, bGone=bExp&&bExp<now;
+      if(aGone&&!bGone) return 1; if(!aGone&&bGone) return -1;
+      if(aExp&&bExp) return aExp-bExp; if(aExp&&!bExp) return -1; if(!aExp&&bExp) return 1;
+      return 0;
+    });
 
-The user wants ALL known promo codes and deals for: "${store}" in ${region} (${catLabel} category).
-Today is ${today}.
+    // Deduplicate by code (case-insensitive), keeping first occurrence
+    const dedup = deals => {
+      const seen = new Set();
+      return deals.filter(p => {
+        const key = (p.code||'').toUpperCase() || Math.random().toString();
+        if(seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+    };
 
-Instructions:
-1. Think carefully about everything you know about "${store}" — their app discounts, loyalty programs, partner codes, seasonal promotions, and any codes shared publicly on OzBargain, RetailMeNot, Groupon, or the store's own promotions page.
-2. For parking companies (Wilson Parking, Secure Parking, Care Park, Wilsons etc): include ALL known codes such as corporate codes, app codes, hotel/venue partner codes, event codes, and widely-shared codes like MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY, and any others you know of.
-3. Include codes even if you are unsure they are still active — set verified:false and note "Unconfirmed — worth trying". Users prefer a code to test over nothing.
-4. Include automatic discounts too (no code needed): app booking discounts, pre-booking rates, early bird pricing, monthly pass deals.
-5. Do NOT invent random codes. Only include codes you actually have knowledge of.
+    // Regions to hunt — either the selected one or all
+    const regionsToHunt = region === 'ALL'
+      ? ['AU','US','UK','NZ','CA','SG']
+      : [region];
 
-Return ONLY a valid JSON array. No markdown, no backticks, no explanation outside the array.
-Each item: {"store":"${store}","code":"PROMOCODE or empty string","discount":"e.g. 20% off","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${cat}","notes":"restrictions, source","verified":true or false,"expiresAt":"YYYY-MM-DD or empty","sourceUrl":""}
-Return up to 10 results. If no knowledge of real codes, return [].`;
+    // Hunt one region via worker or direct Claude
+    const huntRegion = async (rgn) => {
+      if(cleanUrl && cleanUrl.startsWith('http')) {
+        try {
+          const r = await fetch(`${cleanUrl}/hunt`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({store, region:rgn, category:cat, apiKey}),
+          });
+          const d = await r.json();
+          if(d.error) return {deals:[], source:'error', region:rgn};
+          return {deals:Array.isArray(d.deals)?d.deals:[], source:d.source||'scraped', region:rgn};
+        } catch { return {deals:[], source:'error', region:rgn}; }
+      }
+      // Direct Claude fallback
+      try {
+        const prompt = `You are PromoHunter AI. Find ALL known promo codes for "${store}" in ${rgn} (${catLabel}).
+Return ONLY a valid JSON array. Each item: {"store":"${store}","code":"CODE or empty","discount":"value","type":"Percentage|Fixed Amount|BOGO|Free Shipping|Free Trial|Other","category":"${cat}","notes":"source/restrictions","verified":false,"expiresAt":"YYYY-MM-DD or empty","sourceUrl":""}
+Up to 6 results. Return [] if none known.`;
+        const r = await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+          body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1500,messages:[{role:'user',content:prompt}]})
+        });
+        const d = await r.json();
+        if(d.error) return {deals:[], source:'error', region:rgn};
+        const raw = (d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+        const match = raw.replace(/```json|```/g,'').match(/\[[\s\S]*\]/);
+        return {deals: match ? JSON.parse(match[0]) : [], source:'knowledge', region:rgn};
+      } catch { return {deals:[], source:'error', region:rgn}; }
+    };
 
     try {
-      // ── Route A: Cloudflare Worker (required for iOS Safari) ─────────────
-      if(workerUrl) {
-        // Sanitise — strip whitespace, trailing slashes, invisible chars
-        const cleanUrl = workerUrl.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'');
-        if(!cleanUrl.startsWith('http')) {
+      if(region === 'ALL') {
+        // Run all regions in parallel
+        const allResults = await Promise.allSettled(regionsToHunt.map(huntRegion));
+        const allDeals = allResults
+          .filter(r => r.status==='fulfilled')
+          .flatMap(r => (r.value.deals||[]).map(d => ({
+            ...d,
+            notes: `[${r.value.region}] ${d.notes||''}`.trim(),
+          })));
+        const anyScraped = allResults.some(r => r.status==='fulfilled' && r.value.source==='scraped');
+        setSource(anyScraped ? 'scraped' : 'knowledge');
+        setResults(sortDeals(dedup(allDeals)));
+      } else {
+        // Single region
+        if(cleanUrl && !cleanUrl.startsWith('http')) {
           setErr('Worker URL looks invalid — go to ⚙️ Settings → Cloudflare Worker URL and re-paste it.');
           setLoading(false); return;
         }
-        let r;
-        try {
-          r = await fetch(`${cleanUrl}/hunt`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ store, region, category: cat, apiKey }),
-          });
-        } catch(e) {
-          setErr(`Cannot reach worker — check the URL in ⚙️ Settings and your internet. (${e.message})`);
+        const {deals, source: src, region: rgn} = await huntRegion(region);
+        if(!deals.length && src==='error') {
+          setErr(cleanUrl ? `Cannot reach worker — check the URL in ⚙️ Settings and your internet.` : 'iOS Safari blocks direct API calls. Add your Cloudflare Worker URL in ⚙️ Settings.');
           setLoading(false); return;
         }
-        const d = await r.json();
-        if(d.error) {
-          setErr(d.auth ? 'Invalid API key. Tap "Change API key" to update it.' : `Worker error: ${d.error}`);
-          setLoading(false); return;
-        }
-        setSource(d.source || 'scraped');
-        const sortDeals = deals => [...deals].sort((a,b)=>{
-          const now=new Date(), aExp=a.expiresAt?new Date(a.expiresAt):null, bExp=b.expiresAt?new Date(b.expiresAt):null;
-          const aGone=aExp&&aExp<now, bGone=bExp&&bExp<now;
-          if(aGone&&!bGone) return 1; if(!aGone&&bGone) return -1;
-          if(aExp&&bExp) return aExp-bExp; if(aExp&&!bExp) return -1; if(!aExp&&bExp) return 1;
-          return 0;
-        });
-        setResults(sortDeals(Array.isArray(d.deals) ? d.deals : []));
-        setLoading(false); return;
+        setSource(src);
+        setResults(sortDeals(deals));
       }
-
-      // ── Route B: Direct Claude call (desktop/Android only — blocked on iOS) ─
-      let r;
-      try {
-        r = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-5',
-            max_tokens: 2000,
-            messages: [{ role: 'user', content: prompt }],
-          })
-        });
-      } catch(e) {
-        // iOS Safari blocks direct api.anthropic.com calls — worker is required
-        setErr('iOS Safari blocks direct API calls. Add your Cloudflare Worker URL in ⚙️ Settings → Cloudflare Worker URL to enable AI Hunt on iPhone.');
-        setLoading(false); return;
-      }
-      const d = await r.json();
-      if(d.error) {
-        setErr(d.error.type==='authentication_error'
-          ? 'Invalid API key. Tap "Change API key" to update it.'
-          : `API error: ${d.error.message||d.error.type}`);
-        setLoading(false); return;
-      }
-      const raw   = (d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-      const clean = raw.replace(/```json|```/g,'').trim();
-      const match = clean.match(/\[[\s\S]*\]/);
-      if(!match) { setResults([]); setLoading(false); return; }
-      const parsed = JSON.parse(match[0]);
-      const sorted = (Array.isArray(parsed)?parsed:[]).sort((a,b)=>{
-        const now   = new Date();
-        const aExp  = a.expiresAt ? new Date(a.expiresAt) : null;
-        const bExp  = b.expiresAt ? new Date(b.expiresAt) : null;
-        const aGone = aExp && aExp < now;
-        const bGone = bExp && bExp < now;
-        // Expired codes go to bottom
-        if(aGone && !bGone) return 1;
-        if(!aGone && bGone) return -1;
-        // Within same group sort by expiry ascending (soonest first)
-        if(aExp && bExp) return aExp - bExp;
-        if(aExp && !bExp) return -1;
-        if(!aExp && bExp) return 1;
-        return 0;
-      });
-      setSource('knowledge');
-      setResults(sorted);
-
     } catch(e) {
       setErr(`Unexpected error: ${e.message||e}`);
     }
@@ -745,7 +724,7 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
       {loading && (
         <div style={{textAlign:'center',padding:'32px 0'}}>
           <div style={{width:28,height:28,border:`2.5px solid ${T.rule}`,borderTopColor:T.accent,borderRadius:'50%',animation:'spin 0.7s linear infinite',margin:'0 auto 12px'}}/>
-          <p style={{fontSize:13,color:T.inkMid}}>{loadWorkerUrl() ? 'Scraping live coupon sites…' : 'Searching for deals…'}</p>
+          <p style={{fontSize:13,color:T.inkMid}}>{loadWorkerUrl() ? (region==='ALL' ? 'Scraping all regions in parallel…' : 'Scraping live coupon sites…') : 'Searching for deals…'}</p>
         </div>
       )}
       {err && (
