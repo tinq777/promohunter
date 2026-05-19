@@ -30,33 +30,58 @@ const json = (data, status = 200) =>
   });
 
 // ─── Coupon sources per region ────────────────────────────────────────────────
+// Note: RetailMeNot AU was shut down in 2018 — not included.
+// Sources chosen for server-side fetchability and AU relevance.
 const SOURCES = {
   AU: store => [
+    // #1 — OzBargain: AU's largest deal community, excellent for promo codes
     `https://www.ozbargain.com.au/search/node/${encodeURIComponent(store)}?sort=date`,
-    `https://www.retailmenot.com/view/${slug(store)}.com.au`,
+    // #2 — Buckscoop: AU-specific promo code community
+    `https://www.buckscoop.com.au/coupons/${slug(store)}`,
+    // #3 — ShopBack AU: major cashback + coupon site
+    `https://www.shopback.com.au/${slug(store)}`,
+    // #4 — CupoNation AU: large coupon aggregator active in AU
+    `https://www.cuponation.com.au/discounts/${slug(store)}`,
+    // #5 — TopBargains: AU deal forum with promo codes
+    `https://www.topbargains.com.au/store/${slug(store)}`,
+    // #6 — Couponbirds: global aggregator with good AU coverage
+    `https://www.couponbirds.com/codes/${slug(store)}-au`,
+    // #7 — Frugal Feeds: AU coupon aggregator
+    `https://frugalfeeds.com.au/coupons/${slug(store)}`,
+    // #8 — Groupon AU: deals and vouchers
     `https://www.groupon.com.au/coupons/${slug(store)}`,
-    `https://www.picodi.com/au/s/${slug(store)}`,
   ],
   US: store => [
     `https://www.retailmenot.com/view/${slug(store)}.com`,
     `https://www.groupon.com/coupons/${slug(store)}`,
     `https://www.coupons.com/coupon-codes/${slug(store)}`,
+    `https://www.couponbirds.com/codes/${slug(store)}`,
+    `https://www.honey.com/promo-codes/${slug(store)}`,
+    `https://slickdeals.net/slickdeals-promo-codes/${slug(store)}-promo-code/`,
   ],
   UK: store => [
     `https://www.retailmenot.com/view/${slug(store)}.co.uk`,
     `https://www.vouchercodes.co.uk/${slug(store)}.com`,
     `https://www.groupon.co.uk/coupons/${slug(store)}`,
+    `https://www.couponbirds.com/codes/${slug(store)}-uk`,
+    `https://www.picodi.com/gb/s/${slug(store)}`,
   ],
   NZ: store => [
     `https://www.retailmenot.com/view/${slug(store)}.co.nz`,
     `https://www.picodi.com/nz/s/${slug(store)}`,
+    `https://www.couponbirds.com/codes/${slug(store)}-nz`,
+    `https://www.shopback.co.nz/${slug(store)}`,
   ],
   CA: store => [
     `https://www.retailmenot.com/view/${slug(store)}.ca`,
     `https://www.groupon.ca/coupons/${slug(store)}`,
+    `https://www.couponbirds.com/codes/${slug(store)}-ca`,
+    `https://www.redflagdeals.com/stores/${slug(store)}/`,
   ],
   SG: store => [
+    `https://www.shopback.com.sg/${slug(store)}`,
     `https://www.picodi.com/sg/s/${slug(store)}`,
+    `https://www.couponbirds.com/codes/${slug(store)}-sg`,
     `https://www.retailmenot.com/view/${slug(store)}.com.sg`,
   ],
 };
@@ -83,7 +108,7 @@ async function fetchPage(url) {
     });
     if (!res.ok) return '';
     const text = await res.text();
-    return stripHtml(text).slice(0, 5000);
+    return stripHtml(text).slice(0, 3000); // cap per source — 8 sources × 3k = 24k max
   } catch {
     return '';
   }
@@ -97,7 +122,7 @@ async function scrape(store, region) {
     .map(r => r.status === 'fulfilled' ? r.value : '')
     .filter(s => s.length > 50)
     .join('\n\n---\n\n')
-    .slice(0, 18000);
+    .slice(0, 22000);
 }
 
 // ─── Build Claude prompt ──────────────────────────────────────────────────────
@@ -164,7 +189,7 @@ async function callClaude(prompt, apiKey) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
-      max_tokens: 2000,
+      max_tokens: 3000,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
