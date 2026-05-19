@@ -610,7 +610,14 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
           setLoading(false); return;
         }
         setSource(d.source || 'scraped');
-        setResults(Array.isArray(d.deals) ? d.deals : []);
+        const sortDeals = deals => [...deals].sort((a,b)=>{
+          const now=new Date(), aExp=a.expiresAt?new Date(a.expiresAt):null, bExp=b.expiresAt?new Date(b.expiresAt):null;
+          const aGone=aExp&&aExp<now, bGone=bExp&&bExp<now;
+          if(aGone&&!bGone) return 1; if(!aGone&&bGone) return -1;
+          if(aExp&&bExp) return aExp-bExp; if(aExp&&!bExp) return -1; if(!aExp&&bExp) return 1;
+          return 0;
+        });
+        setResults(sortDeals(Array.isArray(d.deals) ? d.deals : []));
         setLoading(false); return;
       }
 
@@ -648,8 +655,23 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
       const match = clean.match(/\[[\s\S]*\]/);
       if(!match) { setResults([]); setLoading(false); return; }
       const parsed = JSON.parse(match[0]);
+      const sorted = (Array.isArray(parsed)?parsed:[]).sort((a,b)=>{
+        const now   = new Date();
+        const aExp  = a.expiresAt ? new Date(a.expiresAt) : null;
+        const bExp  = b.expiresAt ? new Date(b.expiresAt) : null;
+        const aGone = aExp && aExp < now;
+        const bGone = bExp && bExp < now;
+        // Expired codes go to bottom
+        if(aGone && !bGone) return 1;
+        if(!aGone && bGone) return -1;
+        // Within same group sort by expiry ascending (soonest first)
+        if(aExp && bExp) return aExp - bExp;
+        if(aExp && !bExp) return -1;
+        if(!aExp && bExp) return 1;
+        return 0;
+      });
       setSource('knowledge');
-      setResults(Array.isArray(parsed) ? parsed : []);
+      setResults(sorted);
 
     } catch(e) {
       setErr(`Unexpected error: ${e.message||e}`);
@@ -689,7 +711,7 @@ Return up to 10 results. If no knowledge of real codes, return [].`;
         </div>
       )}
 
-      <p style={{fontSize:14,color:T.inkMid,marginBottom:16,lineHeight:1.65}}>Describe any store and Claude will suggest realistic codes tailored to your region.</p>
+      <p style={{fontSize:14,color:T.inkMid,marginBottom:16,lineHeight:1.65}}>Search any store and we'll scrape live coupon sites for real deals, then use AI to extract valid codes for your region.</p>
 
       {/* iOS warning — direct API calls blocked without worker */}
       {!loadWorkerUrl() && (
