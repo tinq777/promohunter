@@ -95,7 +95,7 @@ const REGION_CONTEXT = {
   SG: 'Singapore (SGD). Key retailers: Lazada, Shopee, FairPrice, Redmart, Grab Food.',
 };
 
-// ─── Fetch one page ───────────────────────────────────────────────────────────
+// ─── Fetch one HTML page ──────────────────────────────────────────────────────
 async function fetchPage(url) {
   try {
     const res = await fetch(url, {
@@ -108,7 +108,92 @@ async function fetchPage(url) {
     });
     if (!res.ok) return '';
     const text = await res.text();
-    return stripHtml(text).slice(0, 3000); // cap per source — 8 sources × 3k = 24k max
+    return stripHtml(text).slice(0, 3000);
+  } catch {
+    return '';
+  }
+}
+
+// ─── Reddit JSON API — no auth needed, returns structured posts ───────────────
+async function fetchReddit(store, region) {
+  const subreddits = {
+    AU: ['AusDeals', 'AUfrugal', 'australia'],
+    US: ['deals', 'frugal', 'coupons'],
+    UK: ['HotUKDeals', 'UKPersonalFinance'],
+    NZ: ['newzealand', 'NZDeals'],
+    CA: ['RedFlagDeals', 'PersonalFinanceCanada'],
+    SG: ['singapore'],
+  };
+  const subs = subreddits[region] || subreddits.AU;
+  const results = await Promise.allSettled(
+    subs.map(sub =>
+      fetch(`https://www.reddit.com/r/${sub}/search.json?q=${encodeURIComponent(store + ' promo code discount voucher')}&sort=new&limit=10&restrict_sr=1`, {
+        headers: { 'User-Agent': 'PromoHunter/1.0' },
+        signal: AbortSignal.timeout(6000),
+      })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d?.data?.children) return '';
+        return d.data.children
+          .map(p => `${p.data.title}\n${p.data.selftext || ''}`)
+          .join('\n---\n')
+          .slice(0, 4000);
+      })
+      .catch(() => '')
+    )
+  );
+  return results
+    .map(r => r.status === 'fulfilled' ? r.value : '')
+    .filter(s => s.length > 30)
+    .join('\n\n');
+}
+
+// ─── Store's own promo/offers page — official source ─────────────────────────
+async function fetchStorePromoPage(store, region) {
+  const tld = { AU:'.com.au', US:'.com', UK:'.co.uk', NZ:'.co.nz', CA:'.ca', SG:'.com.sg' };
+  const ext = tld[region] || '.com';
+  const base = `https://www.${slug(store)}${ext}`;
+  // Try common promo page URL patterns
+  const paths = ['/promotions', '/offers', '/deals', '/specials', '/discount', '/vouchers', '/promo', '/sale'];
+  const urls = paths.map(p => base + p);
+  const results = await Promise.allSettled(
+    urls.map(url =>
+      fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        },
+        signal: AbortSignal.timeout(5000),
+      })
+      .then(r => r.ok ? r.text() : '')
+      .then(t => t ? stripHtml(t).slice(0, 2000) : '')
+      .catch(() => '')
+    )
+  );
+  return results
+    .map(r => r.status === 'fulfilled' ? r.value : '')
+    .filter(s => s.length > 100)
+    .slice(0, 2) // max 2 store pages to keep within budget
+    .join('\n\n---\n\n');
+}
+
+// ─── Google search scrape — surfaces codes from across the web ────────────────
+async function fetchGoogleSearch(store, region) {
+  const regionHint = { AU:'australia', US:'usa', UK:'uk', NZ:'new zealand', CA:'canada', SG:'singapore' };
+  const hint = regionHint[region] || '';
+  const query = `${store} promo code voucher discount ${hint} ${new Date().getFullYear()}`;
+  try {
+    const res = await fetch(`https://www.google.com/search?q=${encodeURIComponent(query)}&num=10&hl=en`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-AU,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!res.ok) return '';
+    const text = await res.text();
+    return stripHtml(text).slice(0, 4000);
   } catch {
     return '';
   }
@@ -116,13 +201,40 @@ async function fetchPage(url) {
 
 // ─── Scrape all sources in parallel ──────────────────────────────────────────
 async function scrape(store, region) {
-  const urls = (SOURCES[region] || SOURCES.AU)(store);
-  const settled = await Promise.allSettled(urls.map(fetchPage));
-  return settled
-    .map(r => r.status === 'fulfilled' ? r.value : '')
-    .filter(s => s.length > 50)
-    .join('\n\n---\n\n')
-    .slice(0, 22000);
+  // Run all source types concurrently
+  const [
+    couponPages,
+    redditContent,
+    storePromoContent,
+    googleContent,
+  ] = await Promise.allSettled([
+    // Coupon sites
+    Promise.allSettled((SOURCES[region] || SOURCES.AU)(store).map(fetchPage))
+      .then(results => results
+        .map(r => r.status === 'fulfilled' ? r.value : '')
+        .filter(s => s.length > 50)
+        .join('\n\n---\n\n')
+      ),
+    // Reddit
+    fetchReddit(store, region),
+    // Store's own promo page
+    fetchStorePromoPage(store, region),
+    // Google search
+    fetchGoogleSearch(store, region),
+  ]);
+
+  const sections = [
+    couponPages.status === 'fulfilled' && couponPages.value
+      ? `=== COUPON SITES ===\n${couponPages.value}` : '',
+    redditContent.status === 'fulfilled' && redditContent.value
+      ? `=== REDDIT COMMUNITY POSTS ===\n${redditContent.value}` : '',
+    storePromoContent.status === 'fulfilled' && storePromoContent.value
+      ? `=== STORE PROMO PAGE ===\n${storePromoContent.value}` : '',
+    googleContent.status === 'fulfilled' && googleContent.value
+      ? `=== GOOGLE SEARCH RESULTS ===\n${googleContent.value}` : '',
+  ].filter(Boolean);
+
+  return sections.join('\n\n').slice(0, 24000);
 }
 
 // ─── Build Claude prompt ──────────────────────────────────────────────────────
@@ -147,11 +259,14 @@ function buildPrompt(store, region, category, scraped) {
 Region: ${ctx}
 Today: ${today}
 
+The content below comes from multiple sources — coupon sites, Reddit community posts, the store's own promo page, and Google search results. Each section is labelled.
+
 === SCRAPED CONTENT ===
 ${scraped}
 === END ===
 
-Extract ALL codes, discounts and deals from the text. Also add codes from your training knowledge not already in the content.
+Extract ALL codes, discounts and deals found across ALL sections. Reddit posts and store promo pages often have the most accurate and up-to-date codes.
+Also add codes from your training knowledge not already in the content.
 For parking companies (Wilson Parking, Secure Parking etc) also include: MERLIN, EARLYBIRD, FLEXI, FLEXI15, WEEKEND, MONTHLY.
 
 ${expiryRule}

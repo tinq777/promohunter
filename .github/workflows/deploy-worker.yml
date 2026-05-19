@@ -7,6 +7,7 @@ on:
     paths:
       - 'worker.js'
       - 'wrangler.toml'
+      - '.github/workflows/deploy-worker.yml'
 
 jobs:
   deploy:
@@ -16,17 +17,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Check secrets exist
-        run: |
-          echo "API Token length: ${#CF_API_TOKEN}"
-          echo "Account ID length: ${#CF_ACCOUNT_ID}"
-        env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-
-      - name: List files
-        run: ls -la
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
