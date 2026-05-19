@@ -1107,25 +1107,45 @@ function PromosTab({promos, onUpdate}) {
 }
 
 /* ─── Settings ──────────────────────────────────────────────────────────────── */
-function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark}) {
-  const [cc,setCc] = useState(false);
+function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark, promos, watchlist}) {
+  const [cc,setCc]                   = useState(false);
   const [showKey,setShowKey]         = useState(false);
   const [hasKey,setHasKey]           = useState(()=>!!loadApiKey());
   const [workerUrl,setWorkerUrl]     = useState(loadWorkerUrl);
   const [editWorker,setEditWorker]   = useState(false);
   const [workerInput,setWorkerInput] = useState(loadWorkerUrl);
+  const [lastBackup,setLastBackup]   = useState(()=>{ try{return localStorage.getItem('promohunter_last_backup')||'';}catch{return '';} });
+  const [restoreErr,setRestoreErr]   = useState('');
+  const fileRef = useRef(null);
 
-  // Toggle pill component
+  const doBackup = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const data  = { version:'1.0', exportedAt:new Date().toISOString(), promos:promos||[], watchlist:watchlist||[], settings:{darkMode:dark,workerUrl:loadWorkerUrl()} };
+    const blob  = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`promohunter-backup-${today}.json`; a.click(); URL.revokeObjectURL(a.href);
+    const ts = new Date().toLocaleString();
+    localStorage.setItem('promohunter_last_backup',ts);
+    setLastBackup(ts);
+  };
+
+  const doRestore = e => {
+    const file=e.target.files[0]; if(!file)return; setRestoreErr('');
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try {
+        const d=JSON.parse(ev.target.result);
+        if(!d.promos||!Array.isArray(d.promos)) throw new Error('invalid');
+        onUpdate(()=>d.promos);
+        if(d.watchlist) saveWatch(d.watchlist);
+        alert(`✅ Restored ${d.promos.length} promos from backup (${d.exportedAt?.split('T')[0]||'unknown date'})`);
+        onClose();
+      } catch { setRestoreErr('Invalid backup file — select a PromoHunter JSON backup.'); }
+    };
+    reader.readAsText(file); e.target.value='';
+  };
+
   const Toggle = ({on, onToggle}) => (
-    <button onClick={onToggle} style={{
-      width:44, height:26, borderRadius:13, padding:3,
-      background: on ? T.accent : T.rule,
-      border:'none', cursor:'pointer', flexShrink:0,
-      display:'flex', alignItems:'center',
-      justifyContent: on ? 'flex-end' : 'flex-start',
-      transition:'background 0.2s',
-      WebkitTapHighlightColor:'transparent',
-    }}>
+    <button onClick={onToggle} style={{width:44,height:26,borderRadius:13,padding:3,background:on?T.accent:T.rule,border:'none',cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:on?'flex-end':'flex-start',transition:'background 0.2s',WebkitTapHighlightColor:'transparent'}}>
       <div style={{width:20,height:20,borderRadius:10,background:'#fff',boxShadow:'0 1px 4px rgba(0,0,0,0.2)',transition:'all 0.2s'}}/>
     </button>
   );
@@ -1158,7 +1178,16 @@ function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark}) {
   return (
     <Sheet title="Settings" onClose={onClose}>
       <SH t="Data"/>
-      <Row icon="del"  label="Clear all promos"  sub="Resets to sample data"  danger onClick={()=>setCc(true)}/>
+      <Row icon="del" label="Clear all promos" sub="Resets to sample data" danger onClick={()=>setCc(true)}/>
+      <SH t="Backup"/>
+      <Row icon="save" label="Export backup" sub={lastBackup ? `Last backup: ${lastBackup}` : 'Never backed up — tap to export now'} onClick={doBackup}/>
+      <input ref={fileRef} type="file" accept=".json" onChange={doRestore} style={{display:'none'}}/>
+      <Row icon="undo" label="Restore from backup" sub="Import a PromoHunter JSON backup file" onClick={()=>fileRef.current?.click()}/>
+      {restoreErr && <p style={{fontSize:12,color:T.rose,marginBottom:8,display:'flex',alignItems:'center',gap:6}}><Icon n="info" s={13} c={T.rose}/>{restoreErr}</p>}
+      <div style={{padding:'11px 14px',background:T.goldBg,borderRadius:10,border:`1px solid ${T.gold}30`,marginBottom:4,display:'flex',gap:8,alignItems:'flex-start'}}>
+        <Icon n="info" s={14} c={T.gold}/>
+        <p style={{fontSize:12,color:T.gold,lineHeight:1.6,margin:0}}>Your data lives only on this device. Export a backup regularly so you don't lose your saved codes if you clear browser data or switch devices.</p>
+      </div>
       <SH t="AI Hunt"/>
       <Row icon="bot"  label="Anthropic API key"  sub={hasKey ? 'Key saved — tap to change' : 'Required for AI Hunt'} onClick={()=>setShowKey(true)}/>
       <Row icon="link" label="Cloudflare Worker URL" sub={workerUrl ? '✓ Connected — live scraping enabled' : 'Optional — enables live deal scraping'} onClick={()=>setEditWorker(e=>!e)}/>
@@ -1551,8 +1580,11 @@ function App() {
             <button onClick={()=>setShowHunt(true)} style={{display:'flex',alignItems:'center',gap:7,padding:'0 14px',height:40,background:theme.accentBg,border:`1.5px solid ${theme.accentBd}`,borderRadius:12,cursor:'pointer',color:theme.accent,fontSize:14,fontWeight:600}}>
               <Icon n="bot" s={16} c={theme.accent}/>Hunt
             </button>
-            <button onClick={()=>setShowSettings(true)} style={{width:40,height:40,borderRadius:12,background:theme.bgWarm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <button onClick={()=>setShowSettings(true)} style={{width:40,height:40,borderRadius:12,background:theme.bgWarm,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}}>
               <Icon n="cog" s={18} c={theme.inkMid}/>
+              {!localStorage.getItem('promohunter_last_backup') && (
+                <div style={{position:'absolute',top:6,right:6,width:8,height:8,borderRadius:'50%',background:T.rose,border:`2px solid ${theme.surface}`}}/>
+              )}
             </button>
           </div>
         </div>
@@ -1582,7 +1614,7 @@ function App() {
 
       {/* ── Sheets ── */}
       {showHunt     && <HuntSheet onClose={()=>setShowHunt(false)} onAddPromos={ps=>updatePromos(prev=>[...ps,...prev])}/>}
-      {showSettings && <SettingsPanel onClose={()=>setShowSettings(false)} onUpdate={updatePromos} onReplay={()=>{ localStorage.removeItem('promohunter_onboarded'); setOnboarded(false); }} dark={dark} onToggleDark={toggleDark}/>}
+      {showSettings && <SettingsPanel onClose={()=>setShowSettings(false)} onUpdate={updatePromos} onReplay={()=>{ localStorage.removeItem('promohunter_onboarded'); setOnboarded(false); }} dark={dark} onToggleDark={toggleDark} promos={promos} watchlist={loadWatch()}/>}
     </div>
   );
 }
