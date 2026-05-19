@@ -298,7 +298,7 @@ function Dialog({title, children, onClose}) {
 }
 
 /* ─── Promo Card ────────────────────────────────────────────────────────────── */
-function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onToggleVerified, onCopy}) {
+function PromoCard({promo, onEdit=()=>{}, onDelete=()=>{}, onToggleUsed=()=>{}, onToggleFav=()=>{}, onToggleVerified=()=>{}, onCopy}) {
   const [copied,setCopied] = useState(false);
   const cat   = CAT[promo.category] || CAT.other;
   const exp   = promo.expiresAt ? new Date(promo.expiresAt) : null;
