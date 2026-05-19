@@ -298,7 +298,7 @@ function Dialog({title, children, onClose}) {
 }
 
 /* ─── Promo Card ────────────────────────────────────────────────────────────── */
-function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onCopy}) {
+function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onToggleVerified, onCopy}) {
   const [copied,setCopied] = useState(false);
   const cat   = CAT[promo.category] || CAT.other;
   const exp   = promo.expiresAt ? new Date(promo.expiresAt) : null;
@@ -327,7 +327,12 @@ function PromoCard({promo, onEdit, onDelete, onToggleUsed, onToggleFav, onCopy})
           <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
             <Chip color={cat.color} bg={cat.bg}>{cat.label}</Chip>
             <Chip color={T.inkMid} bg={T.bgWarm}>{promo.type}</Chip>
-            {promo.verified && <Chip color={T.emerald} bg={T.emeraldBg} dot>verified</Chip>}
+            <button onClick={()=>onToggleVerified(promo.id)} style={{background:'none',border:'none',padding:0,cursor:'pointer',WebkitTapHighlightColor:'transparent',lineHeight:1}}>
+              {promo.verified
+                ? <Chip color={T.emerald} bg={T.emeraldBg} dot>✓ verified</Chip>
+                : <Chip color={T.inkFaint} bg={T.bgWarm}>tap to verify</Chip>
+              }
+            </button>
             {isExp          && <Chip color={T.rose}    bg={T.roseBg}    dot>expired</Chip>}
             {isSoon&&!isExp && <Chip color={T.gold}    bg={T.goldBg}    dot>{dl===0?'today':`${dl}d left`}</Chip>}
             {promo.used     && <Chip color={T.inkFaint} bg={T.bgWarm}>used</Chip>}
@@ -990,7 +995,7 @@ function PromosTab({promos, onUpdate}) {
     onUpdate(ps=>ps.map(p=>p.id===id?{...p,used:!p.used}:p));
     if(nowUsed) { setToast('✓ Marked as used'); setTimeout(()=>setToast(''),2000); }
   };
-  const togFav  = id  => onUpdate(ps=>ps.map(p=>p.id===id?{...p,favourite:!p.favourite}:p));
+  const togVerified = id => onUpdate(ps=>ps.map(p=>p.id===id?{...p,verified:!p.verified}:p));
   const copied  = code => { setToast(code); setTimeout(()=>setToast(''),2200); };
 
   const statuses = ['active','used','expired','favourites'];
@@ -1089,7 +1094,7 @@ function PromosTab({promos, onUpdate}) {
         ) : filtered.map(p=>(
           <PromoCard key={p.id} promo={p}
             onEdit={setEditP} onDelete={setDelId}
-            onToggleUsed={togUsed} onToggleFav={togFav} onCopy={copied}/>
+            onToggleUsed={togUsed} onToggleFav={togFav} onToggleVerified={togVerified} onCopy={copied}/>
         ))}
       </div>
 
