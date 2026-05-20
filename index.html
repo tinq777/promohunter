@@ -460,11 +460,14 @@ function PromoForm({promo, onSave, onClose}) {
 /* ─── AI Hunt ───────────────────────────────────────────────────────────────── */
 /* ─── API key helpers (localStorage only, never leaves device) ──────────────── */
 const API_KEY_STORAGE    = 'promohunter_apikey';
-const WORKER_URL_STORAGE = 'promohunter_worker_url';
-const loadApiKey    = () => { try { return localStorage.getItem(API_KEY_STORAGE)||''; } catch { return ''; } };
-const saveApiKey    = k  => { try { localStorage.setItem(API_KEY_STORAGE, k); } catch {} };
-const loadWorkerUrl = () => { try { return localStorage.getItem(WORKER_URL_STORAGE)||''; } catch { return ''; } };
-const saveWorkerUrl = u  => { try { localStorage.setItem(WORKER_URL_STORAGE, u.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'')); } catch {} };
+const WORKER_URL_STORAGE    = 'promohunter_worker_url';
+const WORKER_SECRET_STORAGE = 'promohunter_worker_secret';
+const loadApiKey       = () => { try { return localStorage.getItem(API_KEY_STORAGE)||''; } catch { return ''; } };
+const saveApiKey       = k  => { try { localStorage.setItem(API_KEY_STORAGE, k); } catch {} };
+const loadWorkerUrl    = () => { try { return localStorage.getItem(WORKER_URL_STORAGE)||''; } catch { return ''; } };
+const saveWorkerUrl    = u  => { try { localStorage.setItem(WORKER_URL_STORAGE, u.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'')); } catch {} };
+const loadWorkerSecret = () => { try { return localStorage.getItem(WORKER_SECRET_STORAGE)||''; } catch { return ''; } };
+const saveWorkerSecret = s  => { try { localStorage.setItem(WORKER_SECRET_STORAGE, s.trim()); } catch {} };
 
 /* ─── API Key Setup Sheet ───────────────────────────────────────────────────── */
 function ApiKeySheet({onClose, onSaved}) {
@@ -601,10 +604,12 @@ function HuntSheet({onClose, onAddPromos}) {
     // Hunt one region via worker or direct Claude
     const huntRegion = async (rgn) => {
       if(cleanUrl && cleanUrl.startsWith('http')) {
+        const workerSecret = loadWorkerSecret();
+        const headers = {'Content-Type':'application/json'};
+        if(workerSecret) headers['X-Worker-Token'] = workerSecret;
         try {
           const r = await fetch(`${cleanUrl}/hunt`, {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
+            method:'POST', headers,
             body:JSON.stringify({store, region:rgn, category:cat, apiKey}),
           });
           const d = await r.json();
@@ -1111,16 +1116,18 @@ function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark, promos,
   const [cc,setCc]                   = useState(false);
   const [showKey,setShowKey]         = useState(false);
   const [hasKey,setHasKey]           = useState(()=>!!loadApiKey());
-  const [workerUrl,setWorkerUrl]     = useState(loadWorkerUrl);
-  const [editWorker,setEditWorker]   = useState(false);
-  const [workerInput,setWorkerInput] = useState(loadWorkerUrl);
+  const [workerUrl,setWorkerUrl]         = useState(loadWorkerUrl);
+  const [editWorker,setEditWorker]       = useState(false);
+  const [workerInput,setWorkerInput]     = useState(loadWorkerUrl);
+  const [workerSecret,setWorkerSecret]   = useState(loadWorkerSecret);
+  const [workerSecretInput,setWorkerSecretInput] = useState(loadWorkerSecret);
   const [lastBackup,setLastBackup]   = useState(()=>{ try{return localStorage.getItem('promohunter_last_backup')||'';}catch{return '';} });
   const [restoreErr,setRestoreErr]   = useState('');
   const fileRef = useRef(null);
 
   const doBackup = () => {
     const today = new Date().toISOString().split('T')[0];
-    const data  = { version:'1.0', exportedAt:new Date().toISOString(), promos:promos||[], watchlist:watchlist||[], settings:{darkMode:dark,workerUrl:loadWorkerUrl()} };
+    const data  = { version:'1.0', exportedAt:new Date().toISOString(), promos:promos||[], watchlist:watchlist||[], settings:{darkMode:dark,workerUrl:loadWorkerUrl(),workerSecret:loadWorkerSecret()} };
     const blob  = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
     const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`promohunter-backup-${today}.json`; a.click(); URL.revokeObjectURL(a.href);
     const ts = new Date().toLocaleString();
@@ -1137,6 +1144,8 @@ function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark, promos,
         if(!d.promos||!Array.isArray(d.promos)) throw new Error('invalid');
         onUpdate(()=>d.promos);
         if(d.watchlist) saveWatch(d.watchlist);
+        if(d.settings?.workerUrl) saveWorkerUrl(d.settings.workerUrl);
+        if(d.settings?.workerSecret) saveWorkerSecret(d.settings.workerSecret);
         alert(`✅ Restored ${d.promos.length} promos from backup (${d.exportedAt?.split('T')[0]||'unknown date'})`);
         onClose();
       } catch { setRestoreErr('Invalid backup file — select a PromoHunter JSON backup.'); }
@@ -1204,19 +1213,38 @@ function SettingsPanel({onClose, onUpdate, onReplay, dark, onToggleDark, promos,
               style={{...inputBase(), flex:1, fontSize:13}}
             />
           </div>
+          <div style={{marginTop:10}}>
+            <label style={{display:'block',fontSize:11,fontWeight:600,color:T.inkMid,marginBottom:6,letterSpacing:'0.04em',textTransform:'uppercase'}}>Worker Secret Token</label>
+            <input
+              value={workerSecretInput}
+              onChange={e=>setWorkerSecretInput(e.target.value)}
+              placeholder="Paste your WORKER_SECRET value"
+              type="password"
+              style={{...inputBase(), fontSize:13, width:'100%'}}
+            />
+            <p style={{fontSize:11,color:T.inkFaint,marginTop:5,lineHeight:1.6}}>Set <code>WORKER_SECRET</code> in Cloudflare → your worker → Settings → Variables, then paste the same value here.</p>
+          </div>
           <div style={{display:'flex',gap:8,marginTop:8}}>
-            <Btn onClick={()=>{ saveWorkerUrl(workerInput); setWorkerUrl(workerInput.trim()); setEditWorker(false); }} v="fill" sm full>Save</Btn>
+            <Btn onClick={()=>{
+              saveWorkerUrl(workerInput); setWorkerUrl(workerInput.trim());
+              saveWorkerSecret(workerSecretInput); setWorkerSecret(workerSecretInput.trim());
+              setEditWorker(false);
+            }} v="fill" sm full>Save</Btn>
             {workerInput && <Btn onClick={async()=>{
               const clean = workerInput.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'');
               try {
                 const r = await fetch(clean);
                 const d = await r.json();
-                alert(d.status==='ok' ? '✅ Worker is connected and working!' : '⚠️ Worker responded but unexpectedly: '+JSON.stringify(d));
+                alert(d.status==='ok' ? '✅ Worker is connected and working!' : '⚠️ Worker responded unexpectedly: '+JSON.stringify(d));
               } catch(e) {
                 alert('❌ Cannot reach worker: '+e.message+'\n\nCheck the URL is correct and the worker is deployed.');
               }
             }} v="outline" sm>Test</Btn>}
-            {workerUrl && <Btn onClick={()=>{ saveWorkerUrl(''); setWorkerUrl(''); setWorkerInput(''); setEditWorker(false); }} v="ghost" sm>Remove</Btn>}
+            {workerUrl && <Btn onClick={()=>{
+              saveWorkerUrl(''); setWorkerUrl(''); setWorkerInput('');
+              saveWorkerSecret(''); setWorkerSecret(''); setWorkerSecretInput('');
+              setEditWorker(false);
+            }} v="ghost" sm>Remove</Btn>}
           </div>
         </div>
       )}
