@@ -20,7 +20,7 @@ const stripHtml = html =>
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Token',
 };
 
 const json = (data, status = 200) =>
@@ -324,7 +324,7 @@ async function callClaude(prompt, apiKey) {
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const method = request.method.toUpperCase();
 
     if (method === 'OPTIONS') {
@@ -333,6 +333,22 @@ export default {
 
     const url = new URL(request.url);
 
+    // ── Secret token check ────────────────────────────────────────────────────
+    // WORKER_SECRET must be set as a Cloudflare environment variable.
+    // All requests (except health check) are rejected without it.
+    const secret = env.WORKER_SECRET;
+    if (secret) {
+      // Allow health check without token so Test Connection still works
+      const isHealthCheck = url.pathname === '/' || url.pathname === '';
+      if (!isHealthCheck) {
+        const token = request.headers.get('X-Worker-Token');
+        if (!token || token !== secret) {
+          return json({ error: 'Unauthorised' }, 401);
+        }
+      }
+    }
+
+    // Health check
     if (url.pathname === '/' || url.pathname === '') {
       return json({ status: 'ok', service: 'PromoHunter Worker' });
     }
