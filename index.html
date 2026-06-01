@@ -1316,6 +1316,216 @@ const loadWatch = () => { try { const d=localStorage.getItem(WATCH_STORAGE); ret
 const saveWatch = w => { try { localStorage.setItem(WATCH_STORAGE, JSON.stringify(w)); } catch {} };
 
 /* ─── Watchlist Tab ──────────────────────────────────────────────────────────── */
+/* ─── Price Hunter Tab ───────────────────────────────────────────────────────── */
+function PriceHunterTab() {
+  const [query,    setQuery]    = useState('');
+  const [region,   setRegion]   = useState('AU');
+  const [loading,  setLoading]  = useState(false);
+  const [results,  setResults]  = useState(null);
+  const [err,      setErr]      = useState('');
+
+  const search = async () => {
+    if(!query.trim()) return;
+    const apiKey    = loadApiKey();
+    const workerUrl = loadWorkerUrl();
+    const secret    = loadWorkerSecret();
+    if(!apiKey) { setErr('Add your Anthropic API key in ⚙️ Settings first.'); return; }
+    setLoading(true); setErr(''); setResults(null);
+
+    const cleanUrl = workerUrl ? workerUrl.replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/\/+$/,'') : '';
+
+    try {
+      let deals = [];
+
+      if(cleanUrl && cleanUrl.startsWith('http')) {
+        // Use worker /price endpoint
+        const headers = {'Content-Type':'application/json'};
+        if(secret) headers['X-Worker-Token'] = secret;
+        const r = await fetch(`${cleanUrl}/price`, {
+          method:'POST', headers,
+          body: JSON.stringify({product: query.trim(), region, apiKey}),
+        });
+        const d = await r.json();
+        if(d.error) { setErr(d.auth ? 'Invalid API key.' : `Error: ${d.error}`); setLoading(false); return; }
+        deals = d.results || [];
+      } else {
+        // Direct Claude fallback
+        const prompt = buildPricePrompt(query.trim(), region);
+        const r = await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+          body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,messages:[{role:'user',content:prompt}]})
+        });
+        const d = await r.json();
+        if(d.error){ setErr(`API error: ${d.error.message||d.error.type}`); setLoading(false); return; }
+        const raw = (d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+        const match = raw.replace(/```json|```/g,'').match(/\[[\s\S]*\]/);
+        deals = match ? JSON.parse(match[0]) : [];
+      }
+
+      // Sort cheapest to most expensive
+      const sorted = [...deals].sort((a,b) => {
+        const pa = parseFloat(String(a.price).replace(/[^0-9.]/g,'')) || 9999;
+        const pb = parseFloat(String(b.price).replace(/[^0-9.]/g,'')) || 9999;
+        return pa - pb;
+      });
+      setResults(sorted);
+    } catch(e) {
+      setErr(`Connection failed: ${e.message}`);
+    }
+    setLoading(false);
+  };
+
+  const buildPricePrompt = (product, rgn) => {
+    const currency = {AU:'AUD',US:'USD',UK:'GBP',NZ:'NZD',CA:'CAD',SG:'SGD'}[rgn]||'AUD';
+    return `You are PriceHunter AI. Find where to buy "${product}" in ${rgn} and list stores from cheapest to most expensive.
+
+Research every major retailer in ${rgn} that sells this product. Include online and physical stores.
+
+Return ONLY a valid JSON array, no markdown, no backticks. Each item:
+{"store":"store name","price":"${currency} amount e.g. $49.99","originalPrice":"${currency} amount if on sale, else same as price","url":"store URL","inStock":true or false,"notes":"any relevant info e.g. free shipping, click and collect, delivery cost","condition":"New|Refurbished|Used","verified":false}
+
+Sort from cheapest to most expensive. Include up to 10 stores. Use realistic current ${rgn} prices. If a store doesn't sell this product, exclude it.`;
+  };
+
+  const catColor = (i) => {
+    if(i === 0) return {bg:T.emeraldBg, border:`${T.emerald}40`, label:'#️⃣ Cheapest', color:T.emerald};
+    if(i === 1) return {bg:T.sapphireBg, border:`${T.sapphire}40`, label:'2nd', color:T.sapphire};
+    if(i === 2) return {bg:T.goldBg, border:`${T.gold}40`, label:'3rd', color:T.gold};
+    return {bg:T.bgWarm, border:T.rule, label:`${i+1}th`, color:T.inkMid};
+  };
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',position:'relative'}}>
+
+      {/* Search form */}
+      <div style={{padding:'10px 16px 12px',flexShrink:0}}>
+        <div style={{background:T.surface,borderRadius:14,padding:14,border:`1.5px solid ${T.rule}`}}>
+          <p style={{fontSize:13,fontWeight:600,color:T.ink,marginBottom:10,letterSpacing:'-0.01em'}}>Find cheapest price</p>
+          <input
+            value={query}
+            onChange={e=>setQuery(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&search()}
+            placeholder="e.g. iPhone 15, Nike Air Max, Samsung TV…"
+            style={{width:'100%',padding:'11px 13px',background:T.bgWarm,border:`1.5px solid ${T.rule}`,borderRadius:10,color:T.ink,fontSize:16,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:10}}
+          />
+          <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8}}>
+            <div style={{position:'relative'}}>
+              <select value={region} onChange={e=>setRegion(e.target.value)} style={{width:'100%',padding:'11px 32px 11px 12px',background:T.bgWarm,border:`1.5px solid ${T.rule}`,borderRadius:10,color:T.ink,fontSize:14,outline:'none',appearance:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+                {REGIONS.filter(r=>r.value!=='ALL').map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+              <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',pointerEvents:'none',display:'flex'}}><Icon n="chvD" s={13} c={T.inkFaint}/></span>
+            </div>
+            <Btn onClick={search} disabled={loading||!query.trim()}>
+              {loading ? <div style={{width:16,height:16,border:`2px solid #fff6`,borderTopColor:'#fff',borderRadius:'50%',animation:'spin 0.7s linear infinite'}}/> : <><Icon n="srch" s={15} c="#fff" w={2}/>Search</>}
+            </Btn>
+          </div>
+        </div>
+      </div>
+
+      {/* Error */}
+      {err && (
+        <div style={{margin:'0 16px 10px',padding:'11px 14px',background:T.roseBg,borderRadius:10,border:`1px solid ${T.rose}30`,display:'flex',gap:8,alignItems:'flex-start',flexShrink:0}}>
+          <Icon n="info" s={14} c={T.rose}/>
+          <p style={{fontSize:13,color:T.rose,margin:0,lineHeight:1.5}}>{err}</p>
+        </div>
+      )}
+
+      {/* Results */}
+      <div style={{flex:1,overflowY:'auto',padding:'0 16px 80px',WebkitOverflowScrolling:'touch'}}>
+
+        {loading && (
+          <div style={{textAlign:'center',padding:'40px 20px'}}>
+            <div style={{width:28,height:28,border:`2.5px solid ${T.rule}`,borderTopColor:T.accent,borderRadius:'50%',animation:'spin 0.7s linear infinite',margin:'0 auto 12px'}}/>
+            <p style={{fontSize:13,color:T.inkMid}}>Searching for best prices…</p>
+          </div>
+        )}
+
+        {!loading && results && results.length === 0 && (
+          <div style={{textAlign:'center',padding:'48px 20px'}}>
+            <div style={{width:56,height:56,borderRadius:16,background:T.bgWarm,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+              <Icon n="srch" s={24} c={T.inkFaint}/>
+            </div>
+            <div style={{fontWeight:700,color:T.inkMid,fontSize:15,marginBottom:6}}>No results found</div>
+            <div style={{fontSize:13,color:T.inkFaint}}>Try a more specific product name</div>
+          </div>
+        )}
+
+        {!loading && results && results.length > 0 && (
+          <>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{fontWeight:700,color:T.ink,fontSize:15,letterSpacing:'-0.02em'}}>{results.length} stores found</span>
+              <span style={{fontSize:12,color:T.inkMid}}>Sorted cheapest first</span>
+            </div>
+
+            {results.map((r,i) => {
+              const rank = catColor(i);
+              const price = parseFloat(String(r.price).replace(/[^0-9.]/g,'')) || 0;
+              const origPrice = parseFloat(String(r.originalPrice).replace(/[^0-9.]/g,'')) || 0;
+              const hasDiscount = origPrice > price && price > 0;
+              const pctOff = hasDiscount ? Math.round(((origPrice-price)/origPrice)*100) : 0;
+
+              return (
+                <div key={i} style={{background:T.surface,borderRadius:14,marginBottom:10,border:`1.5px solid ${i===0?T.emerald+'60':T.rule}`,overflow:'hidden',boxShadow:i===0?`0 2px 16px ${T.emerald}15`:'none'}}>
+                  {/* Rank banner for top 3 */}
+                  {i < 3 && (
+                    <div style={{background:rank.bg,borderBottom:`1px solid ${rank.border}`,padding:'5px 14px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                      <span style={{fontSize:11,fontWeight:700,color:rank.color}}>{i===0?'🏆 Cheapest':i===1?'🥈 2nd cheapest':'🥉 3rd cheapest'}</span>
+                      {hasDiscount && <span style={{fontSize:11,fontWeight:700,color:rank.color}}>{pctOff}% off</span>}
+                    </div>
+                  )}
+
+                  <div style={{padding:14}}>
+                    {/* Store + price */}
+                    <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:10,marginBottom:8}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:700,fontSize:15,color:T.ink,letterSpacing:'-0.02em',marginBottom:4}}>{r.store}</div>
+                        <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                          <Chip color={r.inStock!==false?T.emerald:T.rose} bg={r.inStock!==false?T.emeraldBg:T.roseBg} dot>
+                            {r.inStock!==false?'In stock':'Out of stock'}
+                          </Chip>
+                          {r.condition&&r.condition!=='New'&&<Chip color={T.gold} bg={T.goldBg}>{r.condition}</Chip>}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        <div style={{fontWeight:800,fontSize:22,color:i===0?T.emerald:T.ink,letterSpacing:'-0.03em',lineHeight:1}}>{r.price}</div>
+                        {hasDiscount && <div style={{fontSize:12,color:T.inkFaint,textDecoration:'line-through',marginTop:2}}>{r.originalPrice}</div>}
+                      </div>
+                    </div>
+
+                    {r.notes && <p style={{fontSize:12,color:T.inkMid,lineHeight:1.5,marginBottom:10}}>{r.notes}</p>}
+
+                    {r.url && (
+                      <a href={r.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',background:T.accentBg,border:`1.5px solid ${T.accentBd}`,borderRadius:10,color:T.accent,fontSize:13,fontWeight:600,textDecoration:'none'}}>
+                        <Icon n="link" s={13} c={T.accent}/>Visit store
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            <div style={{padding:'12px 14px',background:T.goldBg,borderRadius:10,border:`1px solid ${T.gold}30`,display:'flex',gap:8,alignItems:'flex-start',marginTop:4}}>
+              <Icon n="info" s={14} c={T.gold}/>
+              <p style={{fontSize:11,color:T.gold,lineHeight:1.7,margin:0}}>Prices are estimates based on AI knowledge. Always verify the current price at checkout before purchasing.</p>
+            </div>
+          </>
+        )}
+
+        {!loading && !results && !err && (
+          <div style={{textAlign:'center',padding:'48px 20px'}}>
+            <div style={{width:56,height:56,borderRadius:16,background:T.bgWarm,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+              <Icon n="tag" s={24} c={T.inkFaint}/>
+            </div>
+            <div style={{fontWeight:700,color:T.inkMid,fontSize:15,letterSpacing:'-0.02em',marginBottom:6}}>Search any product</div>
+            <div style={{fontSize:13,color:T.inkFaint,lineHeight:1.6}}>Enter a product name above to compare prices across stores, sorted cheapest first</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WatchlistTab({onAddPromos}) {
   const [watches, setWatches]   = useState(loadWatch);
   const [newStore, setNewStore] = useState('');
@@ -1619,7 +1829,7 @@ function App() {
 
         {/* Tab bar */}
         <div style={{display:'flex',marginTop:12}}>
-          {[{label:'Overview',icon:'grid'},{label:'My Promos',icon:'list'},{label:'Watchlist',icon:'clock'}].map(({label,icon},idx)=>(
+          {[{label:'Overview',icon:'grid'},{label:'My Promos',icon:'list'},{label:'Watchlist',icon:'clock'},{label:'Price Hunt',icon:'tag'}].map(({label,icon},idx)=>(
             <button key={idx} onClick={()=>setTab(idx)} style={{
               flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:5,
               padding:'12px 0', background:'transparent', border:'none',
@@ -1638,6 +1848,7 @@ function App() {
         {tab===0 && <StatsTab promos={promos}/>}
         {tab===1 && <PromosTab promos={promos} onUpdate={updatePromos}/>}
         {tab===2 && <WatchlistTab onAddPromos={ps=>updatePromos(prev=>[...ps,...prev])}/>}
+        {tab===3 && <PriceHunterTab/>}
       </div>
 
       {/* ── Sheets ── */}
