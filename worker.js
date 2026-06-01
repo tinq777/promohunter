@@ -374,6 +374,94 @@ export default {
       }
     }
 
+    if (url.pathname === '/price' && method === 'POST') {
+      let body;
+      try { body = await request.json(); }
+      catch { return json({ error: 'Invalid JSON body' }, 400); }
+
+      const { product, region = 'AU', apiKey } = body || {};
+
+      if (!product?.trim()) return json({ error: 'product is required' }, 400);
+      if (!apiKey?.trim())  return json({ error: 'apiKey is required', auth: true }, 400);
+
+      const currency = {AU:'AUD',US:'USD',UK:'GBP',NZ:'NZD',CA:'CAD',SG:'SGD'}[region]||'AUD';
+      const regionCtx = REGION_CONTEXT[region] || REGION_CONTEXT.AU;
+
+      // Scrape price comparison sites
+      const priceUrls = {
+        AU: [
+          `https://www.staticice.com.au/cgi-bin/search.cgi?q=${encodeURIComponent(product)}&stype=1`,
+          `https://www.getpricelist.com.au/search.aspx?q=${encodeURIComponent(product)}`,
+          `https://www.shopbot.com.au/?q=${encodeURIComponent(product)}`,
+          `https://www.myshopping.com.au/search?keywords=${encodeURIComponent(product)}`,
+          `https://www.google.com/search?q=${encodeURIComponent(product+' price australia buy online')}&num=10`,
+        ],
+        US: [
+          `https://www.google.com/search?q=${encodeURIComponent(product+' price buy online usa')}&num=10`,
+          `https://www.bizrate.com/search/?q=${encodeURIComponent(product)}`,
+        ],
+        UK: [
+          `https://www.google.com/search?q=${encodeURIComponent(product+' price buy online uk')}&num=10`,
+          `https://www.pricespy.co.uk/search?search=${encodeURIComponent(product)}`,
+        ],
+      };
+
+      const urls = (priceUrls[region] || priceUrls.AU);
+      const scraped = await Promise.allSettled(urls.map(fetchPage))
+        .then(rs => rs.map(r=>r.status==='fulfilled'?r.value:'').filter(s=>s.length>50).join('\n\n---\n\n').slice(0,20000));
+
+      const prompt = scraped.length > 200
+        ? `You are PriceHunter AI. Find prices for "${product}" in ${region} from the scraped content below.
+
+Region: ${regionCtx}
+Currency: ${currency}
+Scraped content:
+${scraped}
+
+Extract every store and price you find. Also add major retailers you know sell this product that may not be in the content.
+
+Return ONLY a valid JSON array. Each item:
+{"store":"store name","price":"${currency} amount","originalPrice":"if on sale, original price, else same","url":"store URL or empty","inStock":true or false,"notes":"shipping, delivery info etc","condition":"New|Refurbished|Used","verified":true}
+
+Sort cheapest to most expensive. Up to 12 results. Only include stores that actually sell this product.`
+
+        : `You are PriceHunter AI. Find current prices for "${product}" across all major retailers in ${region}.
+
+Region: ${regionCtx}
+Currency: ${currency}
+
+List every major store that sells this product with their current price. Include online retailers, marketplaces, and physical stores.
+
+Return ONLY a valid JSON array. Each item:
+{"store":"store name","price":"${currency} amount","originalPrice":"if on sale else same","url":"store URL","inStock":true or false,"notes":"shipping/delivery info","condition":"New|Refurbished|Used","verified":false}
+
+Sort cheapest to most expensive. Up to 12 results. Use realistic current ${region} prices.`;
+
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,messages:[{role:'user',content:prompt}]}),
+        });
+        if(!res.ok){
+          const e=await res.json().catch(()=>({})
+          ); throw Object.assign(new Error(e?.error?.message||`HTTP ${res.status}`),{isAuth:res.status===401});}
+        const data  = await res.json();
+        const text  = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+        const match = text.replace(/```json|```/g,'').match(/\[[\s\S]*\]/);
+        const raw   = match ? JSON.parse(match[0]) : [];
+        const sorted = [...raw].sort((a,b)=>{
+          const pa=parseFloat(String(a.price).replace(/[^0-9.]/g,''))||9999;
+          const pb=parseFloat(String(b.price).replace(/[^0-9.]/g,''))||9999;
+          return pa-pb;
+        });
+        return json({results:sorted, source: scraped.length>200?'scraped':'knowledge'});
+      } catch(err) {
+        return json({error:err.message||'Worker error',auth:!!err.isAuth},err.isAuth?401:500);
+      }
+    }
+
+
     return json({ error: 'Not found' }, 404);
   },
 };
